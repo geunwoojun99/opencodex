@@ -8,7 +8,7 @@
  * acquire deadline and every service-installed update restarted into an unmanaged
  * direct proxy beside a suppressed supervisor.
  */
-import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { afterEach, beforeAll, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { spawnSync, type ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import {
@@ -222,10 +222,15 @@ async function serviceManagerChildAuthority(box: Sandbox): Promise<string> {
 function spawnHolder(box: Sandbox, behavior: "release" | "ignore-eof" | "missing-ack" = "release"): FixtureChild {
   const ready = join(box.root, "holder-ready.json");
   const released = join(box.root, "holder-released");
+  const progress = join(box.root, "holder-progress.log");
+  const spawnedAt = Date.now();
   const child = trackChild(box, Bun.spawn([process.execPath, "-e", `
-    const { writeFileSync, renameSync } = await import("node:fs");
+    const { writeFileSync, renameSync, appendFileSync } = await import("node:fs");
+    const mark = (label) => appendFileSync(${JSON.stringify(progress)}, label + " " + Date.now() + "\\n");
+    mark("boot");
     const { relative, isAbsolute, sep } = await import("node:path");
     const { serviceStatePaths } = await import(${JSON.stringify(SERVICE_STATE_MODULE_URL)});
+    mark("state-imported");
     const paths = serviceStatePaths();
     for (const candidate of paths) {
       const rel = relative(${JSON.stringify(box.root)}, candidate);
@@ -233,7 +238,9 @@ function spawnHolder(box: Sandbox, behavior: "release" | "ignore-eof" | "missing
     }
     if (paths.at(-1) !== ${JSON.stringify(box.authority)}) throw new Error("holder authority mismatch");
     const { acquireOwnershipMutationLease } = await import(${JSON.stringify(LEASE_MODULE_URL)});
+    mark("lease-imported");
     const lease = acquireOwnershipMutationLease(paths);
+    mark("acquired");
     writeFileSync(${JSON.stringify(ready + ".pending")}, JSON.stringify({ pid: process.pid, paths }));
     renameSync(${JSON.stringify(ready + ".pending")}, ${JSON.stringify(ready)});
     await Bun.stdin.text();
@@ -246,6 +253,13 @@ function spawnHolder(box: Sandbox, behavior: "release" | "ignore-eof" | "missing
   child.released = released;
   const deadline = Date.now() + isolationBudgetMs(5_000);
   while (!existsSync(ready) && Date.now() < deadline) Bun.sleepSync(20);
+  const waited = Date.now() - spawnedAt;
+  if (!existsSync(ready) || waited > 2_000) {
+    let marks = "";
+    try { marks = readFileSync(progress, "utf8"); } catch { marks = "(no progress file)"; }
+    console.error(`[b8-diag] holder pid=${child.process.pid} spawnedAt=${spawnedAt} waited=${waited}ms ready=${existsSync(ready)}\n${marks}output=${JSON.stringify(child.output.join("").slice(0, 2_000))}`);
+    windowsProcessSnapshot("holder-stall");
+  } else console.error(`[b8-diag] holder ready in ${waited}ms`);
   expect(existsSync(ready), "holder did not acknowledge acquisition").toBe(true);
   const receipt = JSON.parse(readFileSync(ready, "utf8"));
   expect(receipt).toEqual({ pid: child.process.pid, paths: serviceStatePaths() });
@@ -253,6 +267,21 @@ function spawnHolder(box: Sandbox, behavior: "release" | "ignore-eof" | "missing
   expect(owners).toHaveLength(1);
   expect(JSON.parse(readFileSync(join(box.lockDir, owners[0]!), "utf8")).pid).toBe(child.process.pid);
   return child;
+}
+
+/** B8 diagnostic: Windows process table, with parent ids, for the images that can contend. */
+function windowsProcessSnapshot(label: string): void {
+  if (process.platform !== "win32") return;
+  const started = Date.now();
+  const script = "Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name,"
+    + "@{n='Cpu';e={[math]::Round(($_.KernelModeTime+$_.UserModeTime)/1e7,1)}},"
+    + "@{n='Created';e={$_.CreationDate.ToString('HH:mm:ss.fff')}},"
+    + "@{n='Cmd';e={if($_.CommandLine){$_.CommandLine.Substring(0,[math]::Min(160,$_.CommandLine.Length))}}} "
+    + "| Sort-Object Cpu -Descending | Format-Table -AutoSize | Out-String -Width 400";
+  const listed = spawnSync("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script], {
+    encoding: "utf8", timeout: 30_000, windowsHide: true,
+  });
+  console.error(`[b8-diag] snapshot ${label} at ${started} took ${Date.now() - started}ms status=${listed.status}\n${(listed.stdout ?? "").slice(0, 12_000)}`);
 }
 
 function cleanupChild(child: FixtureChild, graceMs = isolationBudgetMs(5_000)): Promise<void> {
@@ -435,6 +464,7 @@ afterEach(async () => {
 }, watchdogMs(90_000));
 
 describe("the restart veto lease frees a service-manager child (#5760)", () => {
+  beforeAll(() => windowsProcessSnapshot("file-start"), 60_000);
   test("a supervised `ocx start` outside the process tree dies at a held lease — the mechanic the release exists for", async () => {
     const box = sandbox();
     expect(await serviceManagerChildAuthority(box)).toBe(box.authority);
@@ -722,6 +752,7 @@ describe("the restart veto lease frees a service-manager child (#5760)", () => {
 
 
 describe("lease fixture containment and cleanup controls", () => {
+  beforeAll(() => windowsProcessSnapshot("containment-start"), 60_000);
   let previousAuthority: string;
   for (const index of [0, 1]) {
     test(`case ${index + 1} owns a distinct parent and child authority`, async () => {
