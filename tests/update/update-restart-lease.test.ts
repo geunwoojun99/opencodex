@@ -910,15 +910,11 @@ describe("lease fixture containment and cleanup controls", () => {
   }
 });
 
-describe("B8 diagnostic: holder startup statistics", () => {
-  const holderScript = (box: Sandbox, ready: string, progress: string) => `
+describe("B8 diagnostic: holder latency after ocx start with and without the Claude intercept", () => {
+  const holderScript = (ready: string, progress: string) => `
     const { writeFileSync, appendFileSync } = await import("node:fs");
     const mark = (label) => { const u = process.cpuUsage(); appendFileSync(${JSON.stringify(progress)}, label + ":" + Date.now() + ":" + Math.round((u.user + u.system) / 1000) + "\\n"); };
     mark("boot");
-    await import(${JSON.stringify(pathToFileURL(repoPath("src/lib/test-home-guard.ts")).href)});
-    mark("guard");
-    await import(${JSON.stringify(pathToFileURL(repoPath("src/config/paths.ts")).href)});
-    mark("paths");
     await import(${JSON.stringify(pathToFileURL(repoPath("src/config.ts")).href)});
     mark("config");
     const { serviceStatePaths } = await import(${JSON.stringify(SERVICE_STATE_MODULE_URL)});
@@ -930,39 +926,68 @@ describe("B8 diagnostic: holder startup statistics", () => {
     await Bun.stdin.text();
     lease.release();
   `;
-  for (const wait of ["sync", "async"] as const) {
-    test(`holder startup with ${wait} parent wait`, async () => {
-      const results: string[] = [];
-      for (let i = 0; i < 30; i++) {
-        const box = sandbox();
-        const kill = i % 3 === 2;
-        const ready = join(box.root, "ready");
-        const progress = join(box.root, "progress.log");
-        const started = Date.now();
-        const child = Bun.spawn([process.execPath, "-e", holderScript(box, ready, progress)], {
-          cwd: box.root, env: serviceManagerChildEnvironment(box), stdin: "pipe", stdout: "pipe", stderr: "pipe",
+  function imageCounts(): string {
+    if (process.platform !== "win32") return "";
+    const listed = spawnSync("tasklist", ["/fo", "csv", "/nh"], { encoding: "utf8", timeout: 15_000, windowsHide: true });
+    const counts = new Map<string, number>();
+    for (const line of (listed.stdout ?? "").split("\n")) {
+      const image = /^"([^"]+)"/.exec(line.trim())?.[1]?.toLowerCase();
+      if (image && /powershell|pwsh|icacls|whoami|bun|conhost|mscorsvw|ngen|compattel|wmiprvse|msmpeng|mpcmdrun/.test(image)) counts.set(image, (counts.get(image) ?? 0) + 1);
+    }
+    return [...counts].map(([image, count]) => `${image}=${count}`).join(",");
+  }
+  test("alternating intercept on/off", async () => {
+    const results: string[] = [];
+    for (const intercept of [true, false, true, false, true, false]) {
+      const box = sandbox();
+      const port = await freePort();
+      writeFileSync(join(box.ocxHome, "config.json"), JSON.stringify({
+        port, hostname: "127.0.0.1", codexAutoStart: false,
+        clientIntegrations: { codex: false, grok: false, "claude-desktop": false },
+        claudeCode: intercept ? { systemEnv: false } : { systemEnv: false, intercept: { enabled: false } },
+        providers: {}, defaultProvider: "openai",
+      }));
+      const startedAt = Date.now();
+      const ocx = spawnServiceChild(box, port);
+      let served = false;
+      while (Date.now() - startedAt < 30_000) { if (await proxyServes(port)) { served = true; break; } await Bun.sleep(100); }
+      const servedMs = Date.now() - startedAt;
+      await Bun.sleep(4_000);
+      const during = imageCounts();
+      ocx.kill();
+      await ocx.exited;
+      const after = imageCounts();
+      const lines: string[] = [];
+      for (let i = 0; i < 8; i++) {
+        const hb = sandbox();
+        const ready = join(hb.root, "ready");
+        const progress = join(hb.root, "progress.log");
+        const spawned = Date.now();
+        const child = Bun.spawn([process.execPath, "-e", holderScript(ready, progress)], {
+          cwd: hb.root, env: serviceManagerChildEnvironment(hb), stdin: "pipe", stdout: "pipe", stderr: "pipe",
         });
-        const out: string[] = [];
-        const drains = [child.stdout, child.stderr].map(stream => new Response(stream).text().then(text => { out.push(text); }));
-        const deadline = started + 20_000;
-        if (wait === "sync") while (!existsSync(ready) && Date.now() < deadline) Bun.sleepSync(20);
-        else while (!existsSync(ready) && Date.now() < deadline) await Bun.sleep(20);
-        const waited = Date.now() - started;
-        const wasReady = existsSync(ready);
-        if (kill) child.kill("SIGKILL"); else child.stdin.end();
-        const exitCode = await child.exited;
+        const drains = [child.stdout, child.stderr].map(stream => new Response(stream).text());
+        while (!existsSync(ready) && Date.now() - spawned < 20_000) Bun.sleepSync(20);
+        const waited = Date.now() - spawned;
+        child.stdin.end();
+        await child.exited;
         await Promise.allSettled(drains);
         let marks = "";
         try {
           marks = readFileSync(progress, "utf8").trim().split("\n").map(line => {
             const [label, at, cpu] = line.split(":");
-            return `${label}+${Number(at) - started}ms(cpu ${cpu})`;
+            return `${label}+${Number(at) - spawned}(${cpu})`;
           }).join(" ");
         } catch { marks = "(none)"; }
-        results.push(`${i} ${kill ? "kill" : "eof"} waited=${waited} ready=${wasReady} exit=${exitCode} ${marks}${out.join("") ? ` out=${JSON.stringify(out.join("").slice(0, 400))}` : ""}`);
+        lines.push(`  holder ${i} waited=${waited} ${marks}`);
       }
-      console.error(`[b8-diag] ${wait} wait:\n${results.join("\n")}`);
-    }, 600_000);
-  }
+      results.push(`intercept=${intercept} served=${served} in ${servedMs}ms during=[${during}] afterKill=[${after}]\n${lines.join("\n")}`);
+      // Tear down between rounds like the fixture does between tests.
+      try { removeTreeWithRetry(box.root); } catch (error) { results.push(`  teardown failed: ${String(error)}`); }
+      sandboxes = sandboxes.filter(entry => entry !== box);
+      children = children.filter(entry => entry.box !== box);
+    }
+    console.error(`[b8-diag] intercept A/B:\n${results.join("\n")}`);
+  }, 600_000);
 });
 
