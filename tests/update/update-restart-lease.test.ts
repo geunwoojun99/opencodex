@@ -909,3 +909,60 @@ describe("lease fixture containment and cleanup controls", () => {
     }, watchdogMs(20_000));
   }
 });
+
+describe("B8 diagnostic: holder startup statistics", () => {
+  const holderScript = (box: Sandbox, ready: string, progress: string) => `
+    const { writeFileSync, appendFileSync } = await import("node:fs");
+    const mark = (label) => { const u = process.cpuUsage(); appendFileSync(${JSON.stringify(progress)}, label + ":" + Date.now() + ":" + Math.round((u.user + u.system) / 1000) + "\\n"); };
+    mark("boot");
+    await import(${JSON.stringify(pathToFileURL(repoPath("src/lib/test-home-guard.ts")).href)});
+    mark("guard");
+    await import(${JSON.stringify(pathToFileURL(repoPath("src/config/paths.ts")).href)});
+    mark("paths");
+    await import(${JSON.stringify(pathToFileURL(repoPath("src/config.ts")).href)});
+    mark("config");
+    const { serviceStatePaths } = await import(${JSON.stringify(SERVICE_STATE_MODULE_URL)});
+    mark("state");
+    const { acquireOwnershipMutationLease } = await import(${JSON.stringify(LEASE_MODULE_URL)});
+    const lease = acquireOwnershipMutationLease(serviceStatePaths());
+    mark("acquired");
+    writeFileSync(${JSON.stringify(ready)}, String(process.pid));
+    await Bun.stdin.text();
+    lease.release();
+  `;
+  for (const wait of ["sync", "async"] as const) {
+    test(`holder startup with ${wait} parent wait`, async () => {
+      const results: string[] = [];
+      for (let i = 0; i < 30; i++) {
+        const box = sandbox();
+        const kill = i % 3 === 2;
+        const ready = join(box.root, "ready");
+        const progress = join(box.root, "progress.log");
+        const started = Date.now();
+        const child = Bun.spawn([process.execPath, "-e", holderScript(box, ready, progress)], {
+          cwd: box.root, env: serviceManagerChildEnvironment(box), stdin: "pipe", stdout: "pipe", stderr: "pipe",
+        });
+        const out: string[] = [];
+        const drains = [child.stdout, child.stderr].map(stream => new Response(stream).text().then(text => { out.push(text); }));
+        const deadline = started + 20_000;
+        if (wait === "sync") while (!existsSync(ready) && Date.now() < deadline) Bun.sleepSync(20);
+        else while (!existsSync(ready) && Date.now() < deadline) await Bun.sleep(20);
+        const waited = Date.now() - started;
+        const wasReady = existsSync(ready);
+        if (kill) child.kill("SIGKILL"); else child.stdin.end();
+        const exitCode = await child.exited;
+        await Promise.allSettled(drains);
+        let marks = "";
+        try {
+          marks = readFileSync(progress, "utf8").trim().split("\n").map(line => {
+            const [label, at, cpu] = line.split(":");
+            return `${label}+${Number(at) - started}ms(cpu ${cpu})`;
+          }).join(" ");
+        } catch { marks = "(none)"; }
+        results.push(`${i} ${kill ? "kill" : "eof"} waited=${waited} ready=${wasReady} exit=${exitCode} ${marks}${out.join("") ? ` out=${JSON.stringify(out.join("").slice(0, 400))}` : ""}`);
+      }
+      console.error(`[b8-diag] ${wait} wait:\n${results.join("\n")}`);
+    }, 600_000);
+  }
+});
+
