@@ -226,9 +226,25 @@ function spawnHolder(box: Sandbox, behavior: "release" | "ignore-eof" | "missing
   const spawnedAt = Date.now();
   const child = trackChild(box, Bun.spawn([process.execPath, "-e", `
     const { writeFileSync, renameSync, appendFileSync } = await import("node:fs");
-    const mark = (label) => appendFileSync(${JSON.stringify(progress)}, label + " " + Date.now() + "\\n");
+    const mark = (label) => { const u = process.cpuUsage(); appendFileSync(${JSON.stringify(progress)}, label + " " + Date.now() + " cpu=" + Math.round((u.user + u.system) / 1000) + "\\n"); };
     mark("boot");
     const { relative, isAbsolute, sep } = await import("node:path");
+    await import(${JSON.stringify(pathToFileURL(repoPath("src/lib/test-home-guard.ts")).href)});
+    mark("guard-imported");
+    await import(${JSON.stringify(pathToFileURL(repoPath("src/config/paths.ts")).href)});
+    mark("paths-imported");
+    await import(${JSON.stringify(pathToFileURL(repoPath("src/config/atomic-write.ts")).href)});
+    mark("atomic-imported");
+    await import(${JSON.stringify(pathToFileURL(repoPath("src/config.ts")).href)});
+    mark("config-imported");
+    await import(${JSON.stringify(pathToFileURL(repoPath("src/codex/home.ts")).href)});
+    mark("codex-home-imported");
+    await import(${JSON.stringify(pathToFileURL(repoPath("src/lib/bun-runtime.ts")).href)});
+    mark("bun-runtime-imported");
+    await import(${JSON.stringify(pathToFileURL(repoPath("src/service/state-lock.ts")).href)});
+    mark("state-lock-imported");
+    await import(${JSON.stringify(pathToFileURL(repoPath("src/service/ownership-compatibility.ts")).href)});
+    mark("compat-imported");
     const { serviceStatePaths } = await import(${JSON.stringify(SERVICE_STATE_MODULE_URL)});
     mark("state-imported");
     const paths = serviceStatePaths();
@@ -259,6 +275,7 @@ function spawnHolder(box: Sandbox, behavior: "release" | "ignore-eof" | "missing
     try { marks = readFileSync(progress, "utf8"); } catch { marks = "(no progress file)"; }
     console.error(`[b8-diag] holder pid=${child.process.pid} spawnedAt=${spawnedAt} waited=${waited}ms ready=${existsSync(ready)}\n${marks}output=${JSON.stringify(child.output.join("").slice(0, 2_000))}`);
     windowsProcessSnapshot("holder-stall");
+    stalledHolders.set(child, progress);
   } else console.error(`[b8-diag] holder ready in ${waited}ms`);
   expect(existsSync(ready), "holder did not acknowledge acquisition").toBe(true);
   const receipt = JSON.parse(readFileSync(ready, "utf8"));
@@ -270,6 +287,7 @@ function spawnHolder(box: Sandbox, behavior: "release" | "ignore-eof" | "missing
 }
 
 /** B8 diagnostic: Windows process table, with parent ids, for the images that can contend. */
+const stalledHolders = new Map<FixtureChild, string>();
 function windowsProcessSnapshot(label: string): void {
   if (process.platform !== "win32") return;
   const started = Date.now();
@@ -439,6 +457,12 @@ afterEach(async () => {
       try { await cleanupChild(child); }
       catch (error) { if (!child.failureObserved) failures.push(error); }
     }
+    for (const [child, progress] of stalledHolders) {
+      let marks = "";
+      try { marks = readFileSync(progress, "utf8"); } catch { marks = "(no progress file)"; }
+      console.error(`[b8-diag] stalled holder pid=${child.process.pid} after cleanup at ${Date.now()} exit=${child.process.exitCode} forced=${child.forced}\n${marks}output=${JSON.stringify(child.output.join("").slice(0, 4_000))}`);
+    }
+    stalledHolders.clear();
     for (const box of sandboxes) {
       if (!canRemoveSandbox(box)) {
         failures.push(new Error(`retaining fixture with unconfirmed child cleanup: ${box.root}`));
