@@ -543,7 +543,13 @@ compatibility pair: `agent.v1.AgentService/RunSSE` for server output and
   Foreground `shellArgs` and `shellStreamArgs` are an exception: both are rejected before spawn
   on every platform until kernel-backed descendant ownership is available. Use client shell tools;
   background-shell execution and other native operations retain their existing policy.
-- The denial reply is a silent redirect whose wording follows the request catalog.
+- The denial reply follows the request catalog. Explicit Claude-family Cursor models receive
+  factual wording that names the available tools without instructions to hide or avoid discussing
+  the redirect. Factual routing commentary can precede the next tool call without ending the turn.
+  When no client or configured MCP tools are available, Claude models are asked to answer without
+  tools or report the limitation instead of calling nonexistent shell/edit tools.
+  Other models, including Auto/default, retain the existing silent-redirect wording and commentary
+  guard. Tool availability, execution policy, and approval/sandbox behavior are unchanged.
   In code mode — a freeform unified `exec` and no bare shell bridge — the redirect points inside `exec`, where
   shell, file, search, and fetch are nested `tools.<name>(...)` helpers of the JavaScript cell,
   and never recommends the top-level shell bridge code mode does not expose. A flat catalog that

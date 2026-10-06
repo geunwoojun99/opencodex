@@ -500,6 +500,7 @@
   "cursor-tool-finalize-race.test.ts": "providers/cursor", "cursor-tool-result-image.test.ts": "providers/cursor",
   "cursor-tool-result-invocation.test.ts": "providers/cursor",
   "cursor-tool-suspended-checkpoint.test.ts": "providers/cursor",
+  "cursor-tool-wording.test.ts": "providers/cursor",
   "cursor-toolresult-normalize.test.ts": "providers/cursor", "cursor-transport-retry.test.ts": "providers/cursor",
   "cursor-ultra-mode.test.ts": "providers/cursor", "cursor-umbrella-rows.test.ts": "providers/cursor",
   "cursor-uncallable-quarantine.test.ts": "providers/cursor", "cursor-vision-wire-harness.test.ts": "providers/cursor",
