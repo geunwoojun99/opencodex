@@ -12,6 +12,7 @@ import { nativeShellDisabledMessage } from "../../../src/adapters/cursor/native-
 import { encodeCursorRunRequest } from "../../../src/adapters/cursor/protobuf-request";
 import { createCursorRequest } from "../../../src/adapters/cursor/request-builder";
 import { buildCursorToolGuidanceSystemNote } from "../../../src/adapters/cursor/tool-guidance";
+import { buildCursorToolDefinitions } from "../../../src/adapters/cursor/tool-definitions";
 import { CURSOR_TOOL_CALL_CONTINUATION, cursorUsesPlainToolWording } from "../../../src/adapters/cursor/tool-wording";
 import { parseRequest } from "../../../src/responses/parser";
 import type { CursorRunRequest, CursorServerMessage } from "../../../src/adapters/cursor/types";
@@ -22,6 +23,11 @@ import { createTestTranslatorBudget } from "../../helpers/translator-budget";
 const CONCEALMENT = /do not (narrate|comment|mention|re-announce)|commentary is forbidden|must not appear in your output/i;
 const CLAUDE_MODELS = ["claude-sonnet-5-5", "cursor/claude-4.6-opus-high", "claude-opus-5-thinking-high-fast", "claude-4.5-haiku", "claude-fable-5", "claude-4-sonnet-1m"];
 const OTHER_MODELS = [undefined, "cursor-grok-4.6-high", "cursor/gpt-5", "gemini-3-pro", "composer-2.5", "cursor/auto", "default", "not-claude-sonnet"];
+const CLAUDE_CLIENT_CATALOGS = [
+  { names: ["Bash", "Read"], wireNames: ["Bash", "Read"] },
+  { names: ["Read", "exec_command"], wireNames: ["ocx_client_Read", "exec_command"] },
+  { names: ["exec_command", "Read"], wireNames: ["exec_command", "ocx_client_Read"] },
+];
 
 function execMessage(message: Parameters<typeof create<typeof ExecServerMessageSchema>>[1]["message"]) {
   return create(ExecServerMessageSchema, { id: 1, execId: "wording-test", message });
@@ -55,6 +61,37 @@ const frames = {
 afterEach(() => resetCursorBlobStateForTests());
 
 describe("Cursor target-specific tool wording", () => {
+  test.each(CLAUDE_CLIENT_CATALOGS)("Claude redirect matches the request catalog: %j", ({ names, wireNames }) => {
+    const tools = names.map(name => ({ name, description: "Fixture tool", parameters: {} }));
+    const definitions = buildCursorToolDefinitions(tools);
+    expect(definitions.map(tool => tool.name)).toEqual(wireNames);
+    const hint = cursorNativeExecRedirectHint(tools, [], "claude-sonnet-5-5")!;
+    expect(hint.match(/Available tools in this request's catalog: (.*?)\. /)?.[1])
+      .toBe(wireNames.map(name => `\`${name}\``).join(", "));
+    const guidance = buildCursorToolGuidanceSystemNote(tools, undefined, "claude-sonnet-5-5")!;
+    for (const name of wireNames) expect(guidance).toContain(`\`${name}\``);
+  });
+  test.each(CLAUDE_CLIENT_CATALOGS)("Claude live transport prepares the request catalog: %j", async ({ names, wireNames }) => {
+    const transport = createLiveCursorTransport({ provider: { adapter: "cursor", baseUrl: "https://api2.cursor.sh", apiKey: "fixture-token" },
+      translatorBudget: createTestTranslatorBudget(), headers: new Headers() });
+    const internal = transport as unknown as { open(bytes: Uint8Array): void; execContext: CursorNativeExecContext };
+    let preparedBytes: Uint8Array | undefined;
+    internal.open = bytes => { preparedBytes = bytes; throw new Error("catalog fixture stops before network"); };
+    try {
+      const request: CursorRunRequest = { modelId: "claude-sonnet-5-5", conversationId: "catalog-fixture", system: [],
+        messages: [{ role: "user", content: "Inspect the project." }],
+        tools: names.map(name => ({ name, description: "Fixture tool", parameters: {} })) };
+      await expect(transport.run(request)[Symbol.asyncIterator]().next()).rejects.toThrow("catalog fixture stops before network");
+      expect(preparedBytes).toBeDefined();
+      const decoded = fromBinary(AgentClientMessageSchema, preparedBytes!);
+      if (decoded.message.case !== "runRequest") throw new Error("Expected runRequest");
+      expect(decoded.message.value.mcpTools?.mcpTools.map(tool => tool.name)).toEqual(wireNames);
+      expect(internal.execContext.clientToolDefs?.map(tool => tool.name)).toEqual(wireNames);
+      expect(internal.execContext.nativeExecRedirectHint?.match(/Available tools in this request's catalog: (.*?)\. /)?.[1])
+        .toBe(wireNames.map(name => `\`${name}\``).join(", "));
+      expect(internal.execContext.plainToolWording).toBe(true);
+    } finally { await transport.close?.(); }
+  });
   test.each(CLAUDE_MODELS)("recognizes Claude target %s", modelId => {
     expect(cursorUsesPlainToolWording(modelId)).toBe(true);
   });

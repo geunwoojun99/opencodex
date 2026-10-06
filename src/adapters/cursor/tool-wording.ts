@@ -18,7 +18,7 @@ export function cursorPlainNativeExecRedirectHint(
 ): string | undefined {
   const clientTools = tools ?? [];
   const names = [...new Set([
-    ...clientTools.map(cursorToolWireName),
+    ...clientTools.map(tool => cursorToolWireName(tool, clientTools)),
     ...mcpToolDefs.map(def => `mcp_${def.providerIdentifier}_${def.name}`),
   ])];
   if (names.length === 0) return CURSOR_NO_CLIENT_TOOLS;

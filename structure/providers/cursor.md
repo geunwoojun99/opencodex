@@ -80,6 +80,10 @@ Cursor-private tool collisions. Other non-proxy-owned bare tools always receive 
 proxy-owned execution/edit tools and namespaced MCP tools retain their existing identities.
 Registration, guidance, denied-native-exec redirects, live call mapping, and protobuf history
 replay use this catalog-dependent rule. Return mapping restores the client's semantic tool name.
+Claude factual redirects resolve each tool against the complete visible request catalog, regardless
+of declaration order, so their listed names match registration with or without a bare shell bridge.
+`tests/providers/cursor/cursor-tool-wording.test.ts` checks both bridge orders and no-bridge catalogs
+through redirect guidance and live transport request preparation.
 Request construction resolves accepted bare wire aliases in forced and allowed-tool choices to
 semantic names against the original catalog, retaining only the originally selected identities
 before prompt and budget filtering so a removed bridge cannot invalidate registration or widen
