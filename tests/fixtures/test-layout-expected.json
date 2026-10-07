@@ -617,6 +617,7 @@
   "issue-914-transport-attribution.test.ts": "codex-integration", "key-attribution.test.ts": "usage",
   "key-failover.test.ts": "adapters", "key-login-live-update.test.ts": "oauth",
   "key-login-preserves-model-costs.test.ts": "oauth", "jev-decision.test.ts": "routing",
+  "jev-service-exchange.test.ts": "routing",
   "jev-decision-destination.test.ts": "routing", "jev-decision-provider-combo.test.ts": "routing",
   "jev-typesafe-golden.test.ts": "routing", "jev-model-backend.test.ts": "routing",
   "jev-provider.test.ts": "providers", "keyring-smoke.test.ts": "ci-workflows",

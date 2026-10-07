@@ -30,8 +30,9 @@ rows reuse `missing_key`, and `decisionTimeoutMs` (1000..120000) replaces the 4 
 
 Decision backends. `src/combos/jev-dispatch.ts` derives the backend from the Combo and never stores
 it: `decisionModel` set means `model`, a `decisionProvider` other than `jev` means `systemone`, and
-neither means `typesafe`; setting both is a config error. The System One path is `src/combos/jev.ts`
-unchanged, so the TypeSafe request bytes stay pinned by `tests/fixtures/jev-typesafe-request-golden.json`.
+neither means `typesafe`; setting both is a config error. `src/combos/jev.ts` builds and validates
+the route question through `src/combos/jev-service-exchange.ts`, the shared question-agnostic HTTP
+exchange. TypeSafe request bytes stay pinned by `tests/fixtures/jev-typesafe-request-golden.json`.
 `src/combos/jev-model-backend.ts` asks an ordinary opencodex route for `{"choice":"<key>"}` over the
 same bounded state and option map, under the same deadline, bounds, and fail-open gates;
 `src/combos/jev-decision-contract.ts` holds the constants the GUI shares. The server glue
@@ -58,10 +59,17 @@ the JEV credential are excluded. All three text samples omit recognized Codex pr
 and Claude Code `<system-reminder>` blocks before clipping, including nested and unclosed blocks.
 Only an envelope-only `codex_internal_context` goal outside a reminder may supply a fallback task;
 reminder-only text supplies no task. Reminder-free inputs keep their existing sampling behavior.
-It owns the joint target/effort choice map, strict response
-validation, canonical `jev-latest` destination, default four-second deadline, no-redirect policy, bounded response,
-and caller-cancellation propagation. Missing credentials or safe state, transport failures, and invalid
-answers fail open to the first eligible target; no response can escape the configured choice map.
+It owns the joint target/effort choice map and strict answer
+validation, including the complete probability distribution. The service exchange owns the canonical
+`jev-latest` destination, credentials, 64 KiB serialized request and response caps, default
+four-second deadline, no-redirect policy, and caller-cancellation propagation. Its request builder
+receives only `model` and `descriptiveCriteria` after authorization/credential resolution; its
+answer parser runs inside the cancellation boundary. Question-specific local refusals and invalid
+answers retain their existing gates. `tests/routing/jev-service-exchange.test.ts` exercises this
+seam independently of route questions; `tests/routing/jev-typesafe-golden.test.ts` keeps the
+unchanged route bytes authoritative. Missing credentials or safe state, transport failures, and
+invalid answers fail open to the first eligible target; no response can escape the configured choice
+map.
 The direct TypeSafe and System One decision destinations are checked against the parent API key's
 resolved provider/model scope before reading decision credentials or extracting state. A denied
 optional decision uses the existing fail-open inference target without sending a decision request;
