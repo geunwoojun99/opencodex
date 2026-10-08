@@ -46,6 +46,7 @@ afterEach(async () => {
   codex.restore(); removeTreeWithRetry(home);
 });
 
+/** Start a teardown-owned loopback upstream that records bodies and headers before replying. */
 function upstream(reply: (body: Rec) => Response | Promise<Response> = body => body.stream === true ? chatStream("fixture answer") : chatSuccess("fixture answer")) {
   const bodies: Rec[] = [];
   const headers: Headers[] = [];
@@ -57,10 +58,12 @@ function upstream(reply: (body: Rec) => Response | Promise<Response> = body => b
   servers.push(server);
   return { bodies, headers, baseUrl: new URL("/v1", server.url).href };
 }
+/** Build a synthetic Chat provider with an overridable effort ladder and loopback transport. */
 function provider(baseUrl: string, extra: Partial<OcxProviderConfig> = {}): OcxProviderConfig {
   return { adapter: "openai-chat", baseUrl, allowPrivateNetwork: true, apiKey: "fixture-inference-key",
     authMode: "key", liveModels: false, models: ["m"], reasoningEfforts: ["low", "medium", "high"], ...extra };
 }
+/** Configure one JEV backend and ingress lane with captured inference and decision requests. */
 function fixture(lane: Lane, backend: Backend, effort: "low" | "high" | null, failure = false) {
   const inference = upstream();
   const choice = `a/m:${effort ?? "none"}`;
@@ -97,6 +100,7 @@ function fixture(lane: Lane, backend: Backend, effort: "low" | "high" | null, fa
   }
   return { config, inference, judge, decisionBodies };
 }
+/** Dispatch and drain a fixture request, returning its response and lane-owned log metadata. */
 async function send(lane: Lane, config: OcxConfig, extra: Rec = {}, signal?: AbortSignal, headers: Rec = {}, admission?: DataPlaneAdmission) {
   const body = lane === "native"
     ? { model: "combo/auto", messages: [{ role: "user", content: "Solve the fixture task." }], reasoning_effort: "high", stream: false, ...extra }

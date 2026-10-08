@@ -101,6 +101,7 @@ interface CandidateVerdict {
   skip?: ProtocolFeature[];
 }
 
+/** Build opt-in native eligibility and child plans; only the initial plan applies a JEV choice. */
 export function createComboProtocolLanes(input: {
   source: ComboProtocolSource | undefined;
   req: Request;
