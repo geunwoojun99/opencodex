@@ -101,7 +101,9 @@ describe("bounded JEV service exchange", () => {
     let sends = 0;
     const opts = options({ post: async () => { sends++; return Response.json({}); } });
     const boundary = "é".repeat(32_768); // 2 bytes each: exactly 65_536 bytes
-    expect(await exchangeJevDecision(opts, () => ({ body: boundary }), parse)).toEqual({ value: {} });
+    let bodyReads = 0;
+    expect(await exchangeJevDecision(opts, () => ({ get body() { bodyReads++; return boundary; } }), parse)).toEqual({ value: {} });
+    expect(bodyReads).toBe(1); // Preparation samples the body once, as before the cancellation fix.
     expect(await exchangeJevDecision(opts, () => ({ body: `${boundary}x` }), parse)).toEqual({ gate: "invalid" });
     expect(sends).toBe(1);
   });
@@ -178,6 +180,159 @@ describe("bounded JEV service exchange", () => {
       })).rejects.toBe(reason);
       if (phase === "read") expect(canceled).toBe(true);
     }
+  });
+
+  // Cancellation ownership: whenever the caller's signal is aborted at a checkpoint, the caller's reason
+  // wins by identity over every local gate. Each case aborts from inside the callback under test and then
+  // refuses or throws, so only a check made after that callback returns can still preserve the reason.
+  test("an already-aborted caller rejects by identity before authorization, credential access, preparation or POST", async () => {
+    const reason = { caller: "stopped before start" };
+    for (const variant of ["self-hosted", "canonical", "missing-key", "unusable", "foreign-credential", "prepare-invalid", "prepare-no-state"] as const) {
+      for (const allowed of [true, false]) {
+        const counts = { authorizations: 0, credentialReads: 0, preparations: 0, sends: 0 };
+        const credential = variant === "missing-key" ? undefined : variant === "foreign-credential" ? "$TYPESAFE_API_KEY" : "fixture-own-key";
+        const canonical = variant === "canonical" || variant === "missing-key";
+        const provider: OcxProviderConfig = canonical
+          ? { adapter: "jev-decision", baseUrl: JEV_API_URL, get apiKey() { counts.credentialReads++; return credential; } }
+          : { ...row, get apiKey() { counts.credentialReads++; return credential; } };
+        const name = canonical ? "jev" : "decider";
+        const caller = new AbortController();
+        caller.abort(reason);
+        const opts = options({
+          config: variant === "unusable" ? { port: 0, defaultProvider: "a", providers: {} } : config(name, provider),
+          decisionProvider: name,
+          signal: caller.signal,
+          isDestinationAllowed() { counts.authorizations++; return allowed; },
+          post: async () => { counts.sends++; return Response.json({}); },
+        });
+        await expect(exchangeJevDecision(opts, () => {
+          counts.preparations++;
+          if (variant === "prepare-invalid") return "invalid";
+          if (variant === "prepare-no-state") return "no_state";
+          return prepare({ model: "m", descriptiveCriteria: true });
+        }, parse)).rejects.toBe(reason);
+        expect(counts).toEqual({ authorizations: 0, credentialReads: 0, preparations: 0, sends: 0 });
+      }
+    }
+  });
+
+  test("a caller abort inside authorization or credential resolution beats the local refusal or throw", async () => {
+    const stages = ["deny", "deny-then-throw", "allow", "foreign-credential", "credential-throw", "credential-unusable"] as const;
+    const previous = [process.env.TYPESAFE_API_KEY, process.env.JEV_API_KEY];
+    delete process.env.TYPESAFE_API_KEY;
+    delete process.env.JEV_API_KEY;
+    try {
+      for (const stage of stages) {
+        const reason = { caller: `stopped during ${stage}` };
+        const caller = new AbortController();
+        const counts = { preparations: 0, sends: 0 };
+        const credential = (): string | undefined => {
+          caller.abort(reason);
+          if (stage === "credential-throw") throw new Error("synthetic credential failure");
+          return stage === "foreign-credential" ? "$TYPESAFE_API_KEY" : undefined;
+        };
+        const unusable = stage === "credential-unusable";
+        const keyed = stage.startsWith("credential") || stage === "foreign-credential";
+        const name = unusable ? "jev" : "decider";
+        const provider: OcxProviderConfig = unusable
+          ? { adapter: "jev-decision", baseUrl: JEV_API_URL, get apiKey() { return credential(); } }
+          : { ...row, get apiKey() { return keyed ? credential() : "fixture-own-key"; } };
+        const opts = options({
+          config: config(name, provider), decisionProvider: name, signal: caller.signal,
+          ...(keyed ? {} : { isDestinationAllowed() {
+            caller.abort(reason);
+            if (stage === "deny-then-throw") throw new Error("synthetic authorization failure");
+            return stage === "allow";
+          } }),
+          post: async () => { counts.sends++; return Response.json({}); },
+        });
+        await expect(exchangeJevDecision(opts, () => { counts.preparations++; return prepare({ model: "m", descriptiveCriteria: true }); }, parse))
+          .rejects.toBe(reason);
+        expect(counts).toEqual({ preparations: 0, sends: 0 });
+      }
+    } finally {
+      for (const [i, key] of ["TYPESAFE_API_KEY", "JEV_API_KEY"].entries()) {
+        if (previous[i] === undefined) delete process.env[key];
+        else process.env[key] = previous[i];
+      }
+    }
+  });
+
+  test("an authorization failure without cancellation keeps its own error and a destination denial stays a gate", async () => {
+    const failure = new Error("synthetic authorization failure");
+    const caller = new AbortController();
+    await expect(exchangeJevDecision(options({ signal: caller.signal, isDestinationAllowed() { throw failure; } }), prepare, parse))
+      .rejects.toBe(failure);
+    expect(await exchangeJevDecision(options({ signal: caller.signal, isDestinationAllowed: () => false }), prepare, parse))
+      .toEqual({ gate: "invalid" });
+  });
+
+  test("a caller abort inside preparation beats every local refusal and prevents the POST", async () => {
+    for (const phase of ["no_choices", "no_state", "invalid", "oversized", "throw", "valid"] as const) {
+      const reason = { caller: `stopped during ${phase} preparation` };
+      const caller = new AbortController();
+      let sends = 0;
+      await expect(exchangeJevDecision(options({ signal: caller.signal, post: async () => { sends++; return Response.json({}); } }), () => {
+        caller.abort(reason);
+        if (phase === "throw") throw new Error("synthetic invalid request");
+        if (phase === "oversized") return { body: "x".repeat(65_537) };
+        if (phase === "valid") return { body: "{}" };
+        return phase;
+      }, parse)).rejects.toBe(reason);
+      expect(sends).toBe(0);
+    }
+  });
+
+  test("a caller abort inside the answer parser beats the invalid gate; other parser failures stay invalid", async () => {
+    for (const outcome of ["throw", "return"] as const) {
+      const reason = { caller: `stopped in parser then ${outcome}` };
+      const caller = new AbortController();
+      await expect(exchangeJevDecision(options({ signal: caller.signal, post: okPost }), prepare, payload => {
+        caller.abort(reason);
+        if (outcome === "throw") throw new Error("synthetic rejected answer");
+        return payload;
+      })).rejects.toBe(reason);
+    }
+    const idle = new AbortController();
+    expect(await exchangeJevDecision(options({ signal: idle.signal, post: okPost }), prepare, () => { throw new Error("synthetic rejected answer"); }))
+      .toEqual({ gate: "invalid" });
+    expect(await exchangeJevDecision(options({ signal: idle.signal, post: okPost }), prepare, parse))
+      .toEqual({ value: { answers: { test: { choice: "yes" } } } });
+  });
+
+  test("a caller abort while a redirect body is canceled still wins over the redirect gate", async () => {
+    const reason = { caller: "stopped while canceling a redirect body" };
+    const caller = new AbortController();
+    const body = new ReadableStream<Uint8Array>({ cancel() { caller.abort(reason); } });
+    await expect(exchangeJevDecision(options({ signal: caller.signal, post: async () => new Response(body, {
+      status: 302, headers: { location: "https://other.example/" },
+    }) }), prepare, parse)).rejects.toBe(reason);
+  });
+
+  test("caller cancellation stays separate from the decision deadline", async () => {
+    const descriptor = Object.getOwnPropertyDescriptor(AbortSignal, "timeout")!;
+    let deadline = new AbortController();
+    Object.defineProperty(AbortSignal, "timeout", { configurable: true, value() { return deadline.signal; } });
+    try {
+      const expired = new DOMException("deadline", "TimeoutError");
+      const idle = new AbortController();
+      expect(await exchangeJevDecision(options({ signal: idle.signal, post: async () => { deadline.abort(expired); throw expired; } }), prepare, parse))
+        .toEqual({ gate: "timeout" });
+      deadline = new AbortController();
+      expect(await exchangeJevDecision(options({ signal: idle.signal, post: okPost }), prepare, () => {
+        deadline.abort(expired);
+        throw new Error("synthetic rejected answer");
+      })).toEqual({ gate: "invalid" });
+      expect(idle.signal.aborted).toBe(false);
+      deadline = new AbortController();
+      const reason = { caller: "stopped as the deadline expired" };
+      const caller = new AbortController();
+      await expect(exchangeJevDecision(options({ signal: caller.signal, post: async () => {
+        deadline.abort(expired);
+        caller.abort(reason);
+        throw expired;
+      } }), prepare, parse)).rejects.toBe(reason);
+    } finally { Object.defineProperty(AbortSignal, "timeout", descriptor); }
   });
 
   test("caller abort reaches the in-flight POST signal and settles long before the deadline", async () => {

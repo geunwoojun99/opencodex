@@ -62,10 +62,14 @@ reminder-only text supplies no task. Reminder-free inputs keep their existing sa
 It owns the joint target/effort choice map and strict answer
 validation, including the complete probability distribution. The service exchange owns the canonical
 `jev-latest` destination, credentials, 64 KiB serialized request and response caps, default
-four-second deadline, no-redirect policy, and caller-cancellation propagation. Its request builder
-receives only `model` and `descriptiveCriteria` after authorization/credential resolution; its
-answer parser runs inside the cancellation boundary. Question-specific local refusals and invalid
-answers retain their existing gates. `tests/routing/jev-service-exchange.test.ts` exercises this
+four-second deadline, no-redirect policy, and caller-cancellation ownership. It rejects an already
+aborted caller by reason identity before endpoint, credential or preparation work. It checks again
+after endpoint resolution and preparation (including failures), POST, redirect inspection and
+response reads, and when parsing returns or throws; caller cancellation takes precedence over the
+local outcome at those checkpoints. The separate decision deadline remains a `timeout` gate. Its
+request builder receives only `model` and `descriptiveCriteria` after authorization/credential
+resolution; its answer parser runs inside the cancellation boundary. Without caller cancellation,
+question-specific local refusals and invalid answers retain their existing gates. `tests/routing/jev-service-exchange.test.ts` exercises this
 seam independently of route questions; `tests/routing/jev-typesafe-golden.test.ts` keeps the
 unchanged route bytes authoritative. Missing credentials or safe state, transport failures, and
 invalid answers fail open to the first eligible target; no response can escape the configured choice

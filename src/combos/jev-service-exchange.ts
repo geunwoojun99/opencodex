@@ -33,8 +33,13 @@ const JEV_OUTBOUND_DEPENDENCIES = {
   allowLocalCleartextPost: true,
 };
 
+/** Every non-applied outcome of one exchange: a local refusal, a transport failure or an invalid answer. */
 export type JevDecisionFailureGate = Exclude<JevDecision["gate"], "apply">;
 
+/**
+ * Transport options shared with the route resolver. `signal` is the caller's cancellation and always
+ * rejects with its own reason; `timeoutMs` is the separate decision deadline that yields a `timeout` gate.
+ */
 export type JevServiceExchangeOptions = Pick<ResolveJevDecisionOptions,
   "config" | "decisionProvider" | "isDestinationAllowed" | "timeoutMs" | "signal" | "post">;
 
@@ -151,31 +156,57 @@ function jevDecisionEndpoint(
   };
 }
 
+/** Run the question builder: a refusal keeps its gate; a throw or an over-cap body is `invalid`. */
+function prepareRequestBody(
+  prepare: (endpoint: JevDecisionEndpointShape) => { body: string } | JevDecisionFailureGate,
+  shape: JevDecisionEndpointShape,
+): { body: string } | { gate: JevDecisionFailureGate } {
+  try {
+    const prepared = prepare(shape);
+    if (typeof prepared === "string") return { gate: prepared };
+    const body = prepared.body;
+    if (new TextEncoder().encode(body).byteLength > JEV_MAX_REQUEST_BYTES) return { gate: "invalid" };
+    return { body };
+  } catch {
+    return { gate: "invalid" };
+  }
+}
+
 /**
  * One bounded System One round-trip, independent of the decision question and its choice policy.
  * Destination authorization precedes credential access and `prepare`; request bytes, deadline,
  * redirects and UTF-8 JSON are bounded here. `parse` validates the question's answer inside the
- * cancellation boundary. Local preparation/parser failures are `invalid`; caller aborts retain
- * their reason by identity rather than becoming a fail-open gate.
+ * cancellation boundary. Local preparation/parser failures are `invalid`.
+ *
+ * This function owns caller cancellation: an aborted `options.signal` rejects with its reason by
+ * identity, never as a gate. It is checked before endpoint, credential or `prepare` work, after
+ * endpoint resolution and preparation (including failures), after POST, redirect inspection and
+ * response reads, and when `parse` returns or throws. Only the caller's signal counts; expiry of
+ * the separate decision deadline remains a `timeout` gate.
  */
 export async function exchangeJevDecision<T>(
   options: JevServiceExchangeOptions,
   prepare: (endpoint: JevDecisionEndpointShape) => { body: string } | JevDecisionFailureGate,
   parse: (payload: unknown) => T,
 ): Promise<{ value: T } | { gate: JevDecisionFailureGate }> {
-  const endpoint = jevDecisionEndpoint(options.config, options.decisionProvider ?? JEV_PROVIDER_ID, options.isDestinationAllowed);
+  if (options.signal?.aborted) throw options.signal.reason;
+
+  let endpoint: JevDecisionEndpoint | undefined | null;
+  try {
+    endpoint = jevDecisionEndpoint(options.config, options.decisionProvider ?? JEV_PROVIDER_ID, options.isDestinationAllowed);
+  } catch (error) {
+    // Authorization and credential callbacks may cancel the caller and then throw; cancellation wins.
+    if (options.signal?.aborted) throw options.signal.reason;
+    throw error;
+  }
+  if (options.signal?.aborted) throw options.signal.reason;
   if (endpoint === null) return { gate: "invalid" };
   if (!endpoint) return { gate: "missing_key" };
 
-  let requestBody: string;
-  try {
-    const prepared = prepare({ model: endpoint.model, descriptiveCriteria: endpoint.descriptiveCriteria });
-    if (typeof prepared === "string") return { gate: prepared };
-    requestBody = prepared.body;
-    if (new TextEncoder().encode(requestBody).byteLength > JEV_MAX_REQUEST_BYTES) return { gate: "invalid" };
-  } catch {
-    return { gate: "invalid" };
-  }
+  const request = prepareRequestBody(prepare, { model: endpoint.model, descriptiveCriteria: endpoint.descriptiveCriteria });
+  if (options.signal?.aborted) throw options.signal.reason;
+  if ("gate" in request) return request;
+  const requestBody = request.body;
 
   const timeoutMs = jevDecisionTimeoutMs(options.timeoutMs);
   const timeoutSignal = AbortSignal.timeout(timeoutMs);
@@ -202,6 +233,7 @@ export async function exchangeJevDecision<T>(
     if (options.signal?.aborted) throw options.signal.reason;
 
     const redirectError = await providerRedirectError(response, endpoint.url);
+    if (options.signal?.aborted) throw options.signal.reason;
     if (redirectError) return { gate: "redirect" };
     if (!response.ok) {
       try { void response.body?.cancel().catch(() => undefined); } catch { /* best effort */ }
@@ -227,6 +259,7 @@ export async function exchangeJevDecision<T>(
     try {
       parsed = parse(payload);
     } catch {
+      if (options.signal?.aborted) throw options.signal.reason;
       return { gate: "invalid" };
     }
     if (options.signal?.aborted) throw options.signal.reason;
