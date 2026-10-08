@@ -368,6 +368,7 @@ function hasImageContent(item: Record<string, unknown>): boolean {
   return item.content.some(part => isRecord(part) && (part.type === "input_image" || part.type === "image_url"));
 }
 
+/** Extract bounded task/assistant/tool evidence, omit protected envelopes, and attach configured target notes. */
 export function buildJevState(body: unknown, candidates: readonly JevCandidate[] = []): Record<string, unknown> {
   const input = isRecord(body) ? body.input : undefined;
   let task = "";
@@ -429,6 +430,7 @@ export function buildJevState(body: unknown, candidates: readonly JevCandidate[]
   };
 }
 
+/** Require task text, an image signal, or a tool-output tail; assistant context and operator notes alone do not suffice. */
 export function hasJevDecisionState(state: Record<string, unknown>): boolean {
   if (typeof state.task === "string" && state.task.trim()) return true;
   if (isRecord(state.signals) && state.signals.has_image === true) return true;
@@ -460,6 +462,7 @@ function candidateOptions(candidates: readonly JevCandidate[]): Map<string, JevR
   return options;
 }
 
+/** Check candidate count and field lengths before state extraction; the exchange separately caps serialized bytes. */
 export function candidatesFitRequestBounds(candidates: readonly JevCandidate[]): boolean {
   if (candidates.length > JEV_MAX_CANDIDATES) return false;
   return candidates.every(candidate => [candidate.key, candidate.provider, candidate.model]
@@ -534,6 +537,7 @@ export function buildJevRouteQuestion(
   };
 }
 
+/** Project only allowlisted, nonnegative safe-integer usage counters; omit missing or wholly invalid usage. */
 export function jevUsage(payload: Record<string, unknown>): Record<string, number> | undefined {
   if (!isRecord(payload.usage)) return undefined;
   const usage: Record<string, number> = {};
@@ -544,6 +548,7 @@ export function jevUsage(payload: Record<string, unknown>): Record<string, numbe
   return Object.keys(usage).length > 0 ? usage : undefined;
 }
 
+/** Validate an allowlisted route choice and any complete probability distribution; throw on invalid answers. */
 export function parseJevDecision(
   payload: unknown,
   candidates: readonly JevCandidate[],
@@ -596,6 +601,7 @@ export function parseJevDecision(
   };
 }
 
+/** Preserve the caller's eligible target/effort fallback while recording the failed gate, backend, and latency. */
 export function fallbackDecision(
   fallback: ResolveJevDecisionOptions["fallback"],
   gate: Exclude<JevDecision["gate"], "apply">,

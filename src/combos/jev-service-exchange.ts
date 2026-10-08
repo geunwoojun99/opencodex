@@ -60,6 +60,7 @@ export function jevDecisionTimeoutMs(value: number | undefined): number {
     : JEV_DECISION_TIMEOUT_DEFAULT_MS;
 }
 
+/** Retain a registry-matching JEV row's transport policy; ignore a retargeted row for hosted requests. */
 function canonicalJevProvider(config: OcxConfig): OcxProviderConfig {
   const configured = config.providers[JEV_PROVIDER_ID];
   if (configured && providerMatchesRegistryTransport(JEV_PROVIDER_ID, configured)) return configured;
@@ -81,6 +82,7 @@ interface JevDecisionEndpoint {
   descriptiveCriteria: boolean;
 }
 
+/** Recognize the $NAME and ${NAME} credential references before applying self-hosted ownership rules. */
 function envReferenceName(value: string): string | undefined {
   const braced = /^\$\{(\w+)\}$/.exec(value);
   if (braced) return braced[1];
