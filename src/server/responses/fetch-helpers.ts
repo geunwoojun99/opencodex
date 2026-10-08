@@ -242,6 +242,7 @@ export interface ProviderFetchOptions {
   dispatchOverride?: (input: Parameters<typeof globalThis.fetch>[0], init: RequestInit, execute: typeof globalThis.fetch) => Promise<Response>;
 }
 
+/** Compose provider pacing and transport admission; receipts run only at executor entry. */
 export function providerFetch(
   provider: OcxProviderConfig,
   runtime: BunRuntimeGateInput = currentBunRuntimeIdentity(),

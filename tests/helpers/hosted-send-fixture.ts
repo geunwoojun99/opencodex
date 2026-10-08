@@ -21,6 +21,7 @@ import { clearResponseStateForTests, flushResponseState } from "../../src/respon
 import { chatStream } from "./combo-failover-upstream";
 
 export type HostedKind = "search" | "image" | "video";
+/** Isolate hosted inference and restore all state before asserting owner release. */
 export async function hostedSendFixture(kind: HostedKind, strategy: "failover" | "jev", run: (f: ReturnType<typeof createFixture>) => Promise<void>, policy?: RequestExecutionBudgetPolicy) {
   const prior = process.env.OPENCODEX_HOME;
   const home = mkdtempSync(join(tmpdir(), "hosted-send-"));
@@ -43,6 +44,7 @@ export async function hostedSendFixture(kind: HostedKind, strategy: "failover" |
     expect(ownership).toBe("unheld");
   }
 }
+/** Build synthetic Combo dispatch with observable physical sends and durable spend settlement. */
 function createFixture(kind: HostedKind, strategy: "failover" | "jev", policy?: RequestExecutionBudgetPolicy) {
   let inference = 0, judge = 0, charges = 0, refunds = 0;
   const bodies: Record<string, unknown>[] = [];

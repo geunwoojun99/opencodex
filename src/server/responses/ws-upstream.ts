@@ -148,6 +148,7 @@ export function shouldUseCodexWsUpstream(
   }
 }
 
+/** Select the bounded WS lane or HTTP fallback, forwarding receipts at physical dispatch. */
 export function codexWsUpstreamFetch(
   url: string,
   init: RequestInit,

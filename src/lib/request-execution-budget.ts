@@ -273,6 +273,7 @@ function createAmbiguousResendGrant(): Pick<SharedSendLedger, "claimAmbiguousRes
   };
 }
 
+/** Keep target-local transition state over the shared ledger and its single-use bookings. */
 function createRequestExecutionBudgetWithLedger(
   policy: RequestExecutionBudgetPolicy,
   logicalRequestId: string | undefined,
@@ -311,6 +312,7 @@ function createRequestExecutionBudgetWithLedger(
     get alternateTargetSends() { return alternateTargetSends; },
     get targetTransitions() { return targetTransitions; },
     get lastTargetKey() { return lastTargetKey; },
+    /** Seed only a fresh scope; never reset recovery history on an existing target. */
     bindPrepaidTarget(targetKey: string): void {
       // Only a fresh scope may bind: this is initial identity, never a recovery rebase.
       if (lastTargetKey === undefined) lastTargetKey = targetKey;

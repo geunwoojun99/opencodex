@@ -13,6 +13,7 @@ export function createSidecarSendBudget(
   const initial = options.comboInitialSend;
   let hopPermit: SingleUseDispatchPermit | undefined;
   let producerActive = false;
+  /** Detach this owner’s hop before refunding its still-unused reservation. */
   const releaseHop = (): void => {
     const permit = hopPermit;
     hopPermit = undefined;
@@ -20,6 +21,7 @@ export function createSidecarSendBudget(
     permit?.release();
   };
   return {
+    /** Retain a Combo hop until dispatch; direct requests keep eager settlement. */
     ownCredentialHop(permit?: SingleUseDispatchPermit): void {
       if (!initial) { permit?.use(); return; } // Preserve direct callers' reporting contract.
       releaseHop();
@@ -33,6 +35,7 @@ export function createSidecarSendBudget(
       onPhysicalSend: send => budget.noteAdapterPhysicalSend(inputTokens(), send),
       onRecoveryWithheld: budget.noteAdapterRecoveryWithheld,
     } satisfies Partial<IncomingMeta> : {},
+    /** Attach HTTP receipts only when the adapter does not own physical dispatch. */
     fetchOptions(adapter: ProviderAdapter): Pick<ProviderFetchOptions, "onPhysicalDispatch"> {
       return initial && !adapter.fetchResponse && !adapter.runTurn
         ? { onPhysicalDispatch: () => {
@@ -41,13 +44,15 @@ export function createSidecarSendBudget(
           budget.noteInitialDispatch(prepaid);
         } } : {};
     },
+    /** Transfer cleanup to the asynchronous producer before it can outlive the response. */
     takeProducerOwnership(): void {
       if (initial) { initial.producerOwned = true; producerActive = true; }
     },
+    /** Release unused bookings only after the owning producer has settled. */
     release(): void {
       initial?.permit.release(); producerActive = false; releaseHop();
     },
-    // Iteration collection can finish while runTurn still awaits pacing or beforeDispatch.
+    /** An iteration may finish before runTurn; defer its refund while that producer is active. */
     releaseUnsentHop(): void { if (!producerActive) releaseHop(); },
   };
 }

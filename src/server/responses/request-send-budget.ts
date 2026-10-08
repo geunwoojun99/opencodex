@@ -62,6 +62,7 @@ export function createResponsesSendBudget(
   // Direct callers retain sends reported before this owner was constructed.
   let targetSendsUsed = initialPermit ? 0 : Math.max(0,
     sendBudget.used - (options.compactionRecoveryPermit ? 1 : 0));
+  /** Attribute reported physical sends locally while settling the shared prepaid charge. */
   const noteTransientSends = (used: number): void => {
     const charged = Math.max(0, used);
     targetSendsUsed += charged;
@@ -183,11 +184,13 @@ export function createResponsesSendBudget(
    * an abandoned replay releases only that exact booking.
    */
   const permits = {
+    /** Transfer the initial booking once to the adapter dispatch owner. */
     claimInitialPermit: () => {
       const permit = initialPermit;
       initialPermit = undefined;
       return permit;
     },
+    /** Transfer a pending recovery booking once, without creating a new allowance. */
     claimHopPermit: () => {
       const permit = pendingHopPermit;
       pendingHopPermit = undefined;
