@@ -461,6 +461,65 @@ describe("bounded JEV service exchange", () => {
       expect(canceled).toBe(true);
     } finally { Object.defineProperty(AbortSignal, "timeout", descriptor); }
   });
+
+  // The destination is the shared decision-endpoint contract (jevDecisionEndpointUrl, #6731), not a copy.
+  describe("decision endpoint URL contract", () => {
+    const answer = { answers: { test: { choice: "yes" }, route: { choice: "a/m2:low" } } };
+    async function sendTo(baseUrl: string) {
+      const sent: Array<{ url: string; body: string }> = [];
+      const post: Post = async (_name, _provider, url, init) => {
+        expect(new Headers(init.headers).get("authorization")).toBe("Bearer fixture-own-key");
+        sent.push({ url, body: String(init.body) });
+        return Response.json(answer);
+      };
+      const opts = options({ config: config("decider", { ...row, baseUrl }), post });
+      const direct = await exchangeJevDecision(opts, prepare, parse);
+      const route = await resolveJevDecision({ ...opts, body: { input: "Choose a target." }, candidates, fallback });
+      return { sent, direct, route };
+    }
+
+    test.each([
+      ["https://decider.example/v1/decisions", "https://decider.example/v1/decisions"],
+      ["https://decider.example/v1/decisions/", "https://decider.example/v1/decisions/"],
+      ["https://decider.example/v1/decisions//", "https://decider.example/v1/decisions//"],
+      ["  https://decider.example/v1/decisions/  ", "https://decider.example/v1/decisions/"],
+      ["https://Decider.Example/v1/Decisions/", "https://Decider.Example/v1/Decisions/"],
+      ["https://decider.example/v1/systemone/extra", "https://decider.example/v1/systemone/extra"],
+      ["https://decider.example/v1/systemone", "https://decider.example/v1/systemone"],
+      ["https://decider.example/v1/systemone/", "https://decider.example/v1/systemone"],
+      ["https://decider.example/v1/systemone//", "https://decider.example/v1/systemone"],
+      ["http://127.0.0.1:11434/v1/systemone/", "http://127.0.0.1:11434/v1/systemone"],
+    ])("baseUrl %j is sent to %j through the exchange and the route", async (baseUrl, expected) => {
+      const { sent, direct, route } = await sendTo(baseUrl);
+      expect(sent.map(request => request.url)).toEqual([expected, expected]);
+      expect(direct).toEqual({ value: answer });
+      expect(route.gate).toBe("apply");
+    });
+
+    test("the request body does not depend on the endpoint path", async () => {
+      const bodies = new Set<string>();
+      for (const baseUrl of ["https://decider.example/v1/decisions/", "https://decider.example/v1/systemone/"]) {
+        const { sent } = await sendTo(baseUrl);
+        expect(sent).toHaveLength(2);
+        sent.forEach(request => bodies.add(request.body));
+      }
+      expect(bodies.size).toBe(2); // one exchange body and one route body, identical across both endpoints
+    });
+
+    test.each([
+      "https://decider.example/v1/systemone?mode=x", "https://decider.example/v1/decisions?",
+      "https://decider.example/v1/systemone#part", "https://decider.example/v1/decisions#",
+      "https://user:pass@example.test/v1/systemone", "https://@decider.example/v1/decisions",
+      "https:\t//@decider.example/v1/decisions", "https://decider.example/v1/system\tone",
+      "http://decider.example/v1/systemone", "http://127.0.0.1:11434/v1/decisions",
+      "ftp://decider.example/v1/systemone", "not a url",
+    ])("baseUrl %j is refused before any send", async (baseUrl) => {
+      const { sent, direct, route } = await sendTo(baseUrl);
+      expect(sent).toEqual([]);
+      expect(direct).toEqual({ gate: "missing_key" });
+      expect(route.gate).toBe("missing_key");
+    });
+  });
 });
 
 const candidates: JevCandidate[] = [

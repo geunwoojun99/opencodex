@@ -61,7 +61,8 @@ Only an envelope-only `codex_internal_context` goal outside a reminder may suppl
 reminder-only text supplies no task. Reminder-free inputs keep their existing sampling behavior.
 It owns the joint target/effort choice map and strict answer
 validation, including the complete probability distribution. The service exchange owns the canonical
-`jev-latest` destination, credentials, 64 KiB serialized request and response caps, default
+`jev-latest` destination, the self-hosted URL (shared `jevDecisionEndpointUrl`: an HTTPS path as
+configured, `/systemone` trailing slashes normalized), credentials, 64 KiB serialized request and response caps, default
 four-second deadline, no-redirect policy, and caller-cancellation ownership. It rejects an already
 aborted caller by reason identity before endpoint, credential or preparation work. It checks again
 after endpoint resolution and preparation (including failures), POST, redirect inspection, HTTP
