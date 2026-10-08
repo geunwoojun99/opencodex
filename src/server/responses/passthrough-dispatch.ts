@@ -974,6 +974,8 @@ export async function preparePassthroughExchange(
     if (initialBodyRefusal) return initialBodyRefusal;
     // A combo-owned first send is settled by the physical-dispatch receipt unless spend
     // enforcement is on, where the shared reporter already owns the permit lifecycle.
+    // Stable per request: the Combo booking (`reserveDispatch`) already started and froze the spend
+    // policy, so `spendEnforced` cannot change before dispatch even though no reporter starts it here.
     const receiptMode = !sendBudgetState.adapterSendBudget?.spendEnforced && Boolean(options.comboInitialSend);
     try {
       // Transient-5xx pre-stream retry (devlog/_plan/260716_claudecode_hardening/010):

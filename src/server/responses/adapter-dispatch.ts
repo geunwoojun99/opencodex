@@ -380,6 +380,8 @@ export async function prepareAdapterExchange(
       // A combo-owned or compaction-prepaid send is settled by the physical-dispatch receipt
       // when spend enforcement is off. Enforced spend and direct requests keep the shared
       // physical-send reporter, which already owns the permit lifecycle there.
+      // Stable per request: a Combo or compaction permit comes from `reserveDispatch`, which starts
+      // (and freezes) the spend policy first, so `spendEnforced` cannot change before dispatch.
       const receiptMode = !sendBudgetState.adapterSendBudget?.spendEnforced
         && Boolean(options.comboInitialSend || compactPrepaid);
       // Combo and emergency compaction admission already book this target's first send.
