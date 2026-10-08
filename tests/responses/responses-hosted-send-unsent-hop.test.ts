@@ -8,6 +8,9 @@ import { providerRequestPacingStatus, resetProviderRequestPacingForTest } from "
 import { hostedSendFixture } from "../helpers/hosted-send-fixture";
 import { budgetOwner } from "../helpers/send-budget-owner";
 import { createRequestExecutionBudget } from "../../src/lib/request-execution-budget";
+import { createResponsesSendBudget } from "../../src/server/responses/request-send-budget";
+import { createSidecarSendBudget } from "../../src/server/responses/sidecar-send-budget";
+import { createTranslatorBudget } from "../../src/lib/translator-budget";
 
 let forbiddenNetwork: ReturnType<typeof spyOn>;
 beforeEach(() => {
@@ -107,6 +110,45 @@ for (const kind of ["search", "image", "video"] as const) for (const sent of [fa
     });
   }));
 }
+
+for (const claimed of [false, true]) for (const sent of [false, true]) test(`sidecar iteration cannot release active producer hop (claimed=${claimed}, sent=${sent})`, async () => {
+  let refunds = 0, physical = 0;
+  const budget = createRequestExecutionBudget(undefined, undefined, { charge: () => true, refund: () => { refunds++; } });
+  const initial = budget.reserveDispatch({ sendClass: "initial", targetKey: "endpoint-one", countedExternally: true });
+  if (!initial.allowed) throw new Error("synthetic initial denied");
+  const translatorBudget = createTranslatorBudget();
+  const options = { sendBudget: budget, translatorBudget, comboInitialSend: { permit: initial.permit } };
+  const owner = createResponsesSendBudget({ req: new Request("http://localhost/v1/responses"),
+    logCtx: { provider: "a", model: "m" }, options });
+  if (owner instanceof Response) throw new Error("synthetic owner refused");
+  const sidecar = createSidecarSendBudget(options, owner, () => undefined);
+  let resume!: () => void, entered!: () => void;
+  const gate = new Promise<void>(resolve => { resume = resolve; });
+  const waiting = new Promise<void>(resolve => { entered = resolve; });
+  try {
+    sidecar.takeProducerOwnership();
+    const first = owner.adapterDispatchBudget!.reserveDispatch({ sendClass: "initial", targetKey: "endpoint-one" });
+    if (!first.allowed || !first.permit.use()) throw new Error("synthetic initial dispatch denied");
+    sidecar.ownCredentialHop(owner.reserveCredentialHop("auth-recovery", "endpoint-one", true).permit);
+    const send = createAdapterPhysicalSend({ sendBudget: owner.adapterDispatchBudget,
+      executor: (async () => { physical++; return Response.json({ ok: true }); }) as unknown as typeof fetch });
+    const producer = claimed ? send({ url: "endpoint-one", beforeDispatch: async () => {
+      entered(); await gate;
+      if (!sent) throw new Error("synthetic abandoned producer");
+    }, dispatch: executor => executor("https://synthetic.invalid") }) : undefined;
+    const result = producer?.then(() => undefined, error => error);
+    if (claimed) await waiting;
+    sidecar.releaseUnsentHop();
+    expect(budget.used).toBe(2); expect(refunds).toBe(0);
+    resume();
+    if (claimed && sent) expect(await result).toBeUndefined();
+    else if (claimed) expect(await result).toBeInstanceOf(Error);
+    sidecar.release(); sidecar.releaseUnsentHop(); sidecar.release();
+    expect(owner.pendingHopPermit).toBeUndefined();
+    expect(physical).toBe(claimed && sent ? 1 : 0);
+    expect(budget.used).toBe(claimed && sent ? 2 : 1); expect(refunds).toBe(claimed && sent ? 0 : 1);
+  } finally { resume(); sidecar.release(); translatorBudget.dispose(); }
+});
 
 function hopOwner(maxTargetTransitions = 1) {
   let charges = 0, refunds = 0;

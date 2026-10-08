@@ -11,8 +11,10 @@ That reservation occupies the shared ceiling immediately; it is not a completed 
 `comboInitialSend` hands only that child's single-use permit to `request-send-budget.ts`.
 `initialSendAllowance` includes that one prepaid send while `remainingBaseSends` keeps every
 booking spent. Other pending external bookings never become this child's free headroom.
-Configured transient totals subtract target-local physical sends, not earlier Combo targets or
-the child's unsent booking; both the shared ceiling and later-target holdback still intersect them.
+Configured transient totals subtract an owner-local counter updated by physical receipts, adapter
+observers and retry-helper reports, not shared-ledger deltas. Earlier Combo targets, later bookings
+by other owners and the child's unsent booking do not consume that total; the shared ceiling and
+later-target holdback still intersect it.
 
 Initial passthrough and budgeted translated HTTP ladders report at the final executor admission,
 after pacing, credential rebuild and local egress checks, rather than at retry callback entry.
@@ -40,7 +42,9 @@ accounting contract. The hosted reservation, producer and WS regression siblings
 assert real synthetic inference, explicit durable settlement and unsent release without widening caps.
 Hosted credential hops stay open in this owner and the live pending-hop view until physical dispatch;
 generic receipts consume that exact permit, adapters claim it through the view, and fetch-iteration
-cleanup releases an unsent hop once. Direct callers retain their prior hop reporting contract.
+cleanup releases an unsent hop once, except while an asynchronous runTurn producer still owns it.
+Producer settlement performs that release instead, clearing only the matching pending-hop reference.
+Direct callers retain their prior hop reporting contract.
 
 ## Credential-hop reservations
 

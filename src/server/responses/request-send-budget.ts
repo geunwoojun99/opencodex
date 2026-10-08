@@ -58,10 +58,13 @@ export function createResponsesSendBudget(
   // to the root as well (#4546).
   const workflowRootId = req.headers.get("x-codex-parent-thread-id")?.trim() || undefined;
   let initialPermit = options.comboInitialSend?.permit;
-  // A Combo target owns its configured total; preceding targets still occupy the shared ledger.
-  const initialTargetSpend = initialPermit ? Math.max(0, sendBudget.used - 1) : 0;
+  // Count this owner's physical sends, not later bookings made by other shared-ledger owners.
+  // Direct callers retain sends reported before this owner was constructed.
+  let targetSendsUsed = initialPermit ? 0 : Math.max(0,
+    sendBudget.used - (options.compactionRecoveryPermit ? 1 : 0));
   const noteTransientSends = (used: number): void => {
     const charged = Math.max(0, used);
+    targetSendsUsed += charged;
     if (charged > 0) { initialPermit?.use(); initialPermit = undefined; }
     sendBudget.used += charged;
     options.onCompactionRecoverySendsReported?.(charged);
@@ -119,6 +122,7 @@ export function createResponsesSendBudget(
     // Ordinal 1 is skipped because the caller normally records it before dispatch. An adapter
     // that reports every send asks for it to be counted here instead, so that the first send is
     // logged where it actually happens rather than before admission could still refuse it.
+    targetSendsUsed += 1;
     if (send.ordinal <= 1 && options.includeFirst !== true) return;
     noteAttemptSend(logCtx.activeAttempt, inputTokens, send.recovery);
   };
@@ -298,12 +302,12 @@ export function createResponsesSendBudget(
         noteTransientSends(1);
         return;
       }
+      targetSendsUsed += 1;
       options.onCompactionRecoverySendsReported?.(1);
       chargeWorkflowSends(workflowRootId, 1);
     },
-    get targetSendsUsed(): number {
-      return Math.max(0, sendBudget.used - initialTargetSpend - (initialPermit ? 1 : 0));
-    },
+    /** Physical sends reported by this owner; unrelated shared reservations cannot consume it. */
+    get targetSendsUsed(): number { return targetSendsUsed; },
     /**
      * Charged sends, including open prepaid reservations, across this logical request.
      *

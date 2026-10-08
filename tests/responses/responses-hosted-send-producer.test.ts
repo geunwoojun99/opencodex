@@ -4,6 +4,25 @@ import type { IncomingMeta } from "../../src/adapters/base";
 import { createAdapterPhysicalSend } from "../../src/adapters/physical-send";
 import { getActiveTurnCount } from "../../src/server/lifecycle";
 import { hostedSendFixture } from "../helpers/hosted-send-fixture";
+import { existsSync } from "node:fs";
+import * as spendOwner from "../../src/lib/spend-ledger-owner";
+
+test("hosted fixture restores both homes and removes directories even when ownership assertion fails", async () => {
+  const priorHome = process.env.OPENCODEX_HOME, priorCodex = process.env.CODEX_HOME;
+  let home = "", codex = "";
+  const snapshot = spyOn(spendOwner, "spendLedgerOwnerSnapshot").mockReturnValue({ ownership: "held" });
+  try {
+    await expect(hostedSendFixture("image", "failover", async () => {
+      home = process.env.OPENCODEX_HOME!; codex = process.env.CODEX_HOME!;
+    })).rejects.toThrow();
+    expect(process.env.OPENCODEX_HOME).toBe(priorHome); expect(process.env.CODEX_HOME).toBe(priorCodex);
+    expect(existsSync(home)).toBe(false); expect(existsSync(codex)).toBe(false);
+  } finally { snapshot.mockRestore(); }
+  expect(spendOwner.spendLedgerOwnerSnapshot().ownership).toBe("unheld");
+  await hostedSendFixture("image", "failover", async () => {
+    expect(spendOwner.spendLedgerOwnerSnapshot().ownership).toBe("held");
+  });
+});
 
 function deferred() { let resolve!: () => void; const promise = new Promise<void>(r => { resolve = r; }); return { promise, resolve }; }
 async function bounded<T>(promise: Promise<T>): Promise<T> {

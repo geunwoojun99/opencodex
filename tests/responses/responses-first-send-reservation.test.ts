@@ -323,6 +323,35 @@ test("prepaid helper exposes only child's booking, never unrelated pending capac
   } finally { f.dispose(); }
 });
 
+for (const transport of ["receipt", "adapter", "reporter"] as const) test(`target-local ${transport} sends ignore later bookings by another owner`, () => {
+  const f = prepaidOwner();
+  try {
+    const other = f.budget.reserveDispatch({ sendClass: "transient", targetKey: "a/m", countedExternally: true });
+    if (!other.allowed) throw new Error("fixture refused");
+    expect(f.owner.targetSendsUsed).toBe(0);
+    if (transport === "receipt") f.owner.noteInitialDispatch();
+    else if (transport === "reporter") f.owner.noteTransientSends(1);
+    else {
+      const first = f.owner.adapterDispatchBudget!.reserveDispatch({ sendClass: "initial", targetKey: "endpoint-one" });
+      if (!first.allowed || !first.permit.use()) throw new Error("fixture dispatch denied");
+      f.owner.noteAdapterPhysicalSend(undefined, { ordinal: 1 });
+    }
+    expect(f.owner.targetSendsUsed).toBe(1);
+    expect(transientSendCapFor(2, f.owner.targetSendsUsed)).toBe(1);
+    expect(f.owner.sendsUsed).toBe(2); // Both owners still occupy shared admission capacity.
+    if (transport === "receipt") f.owner.noteInitialDispatch();
+    else if (transport === "reporter") f.owner.noteTransientSends(1);
+    else {
+      const retry = f.owner.adapterDispatchBudget!.reserveDispatch({ sendClass: "transient", targetKey: "endpoint-one" });
+      if (!retry.allowed || !retry.permit.use()) throw new Error("fixture retry denied");
+      f.owner.noteAdapterPhysicalSend(undefined, { ordinal: 2 });
+    }
+    expect(f.owner.targetSendsUsed).toBe(2); expect(transientSendCapFor(2, f.owner.targetSendsUsed)).toBe(0);
+    other.permit.release();
+    expect(f.owner.targetSendsUsed).toBe(2);
+  } finally { f.dispose(); }
+});
+
 test("initial-ladder retry reserves its own send without settling another pending booking", () => {
   const f = prepaidOwner();
   try {

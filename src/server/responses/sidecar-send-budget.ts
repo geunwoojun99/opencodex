@@ -12,10 +12,17 @@ export function createSidecarSendBudget(
 ) {
   const initial = options.comboInitialSend;
   let hopPermit: SingleUseDispatchPermit | undefined;
+  let producerActive = false;
+  const releaseHop = (): void => {
+    const permit = hopPermit;
+    hopPermit = undefined;
+    if (budget.pendingHopPermit === permit) budget.pendingHopPermit = undefined;
+    permit?.release();
+  };
   return {
     ownCredentialHop(permit?: SingleUseDispatchPermit): void {
       if (!initial) { permit?.use(); return; } // Preserve direct callers' reporting contract.
-      hopPermit?.release();
+      releaseHop();
       hopPermit = permit;
       budget.pendingHopPermit = permit;
     },
@@ -34,8 +41,13 @@ export function createSidecarSendBudget(
           budget.noteInitialDispatch(prepaid);
         } } : {};
     },
-    takeProducerOwnership(): void { if (initial) initial.producerOwned = true; },
-    release(): void { initial?.permit.release(); hopPermit?.release(); },
-    releaseUnsentHop(): void { hopPermit?.release(); },
+    takeProducerOwnership(): void {
+      if (initial) { initial.producerOwned = true; producerActive = true; }
+    },
+    release(): void {
+      initial?.permit.release(); producerActive = false; releaseHop();
+    },
+    // Iteration collection can finish while runTurn still awaits pacing or beforeDispatch.
+    releaseUnsentHop(): void { if (!producerActive) releaseHop(); },
   };
 }

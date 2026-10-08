@@ -31,11 +31,16 @@ export async function hostedSendFixture(kind: HostedKind, strategy: "failover" |
     clearComboSelectionState(); clearComboTargetCooldowns();
     await run(createFixture(kind, strategy, policy));
   } finally {
-    release(); expect(spendLedgerOwnerSnapshot().ownership).toBe("unheld");
-    closeRequestHistoryIndex(); await flushResponseState(); clearResponseStateForTests();
-    clearComboSelectionState(); clearComboTargetCooldowns(); codex.restore();
-    if (prior === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = prior;
-    removeTreeWithRetry(home);
+    let ownership: ReturnType<typeof spendLedgerOwnerSnapshot>["ownership"] | undefined;
+    try {
+      release(); ownership = spendLedgerOwnerSnapshot().ownership;
+      closeRequestHistoryIndex(); await flushResponseState(); clearResponseStateForTests();
+    } finally {
+      clearComboSelectionState(); clearComboTargetCooldowns(); codex.restore();
+      if (prior === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = prior;
+      removeTreeWithRetry(home);
+    }
+    expect(ownership).toBe("unheld");
   }
 }
 function createFixture(kind: HostedKind, strategy: "failover" | "jev", policy?: RequestExecutionBudgetPolicy) {

@@ -591,8 +591,7 @@ export async function prepareAdapterExchange(
           const helperCountsSends = refetchTransientPolicy !== null || resetReplayPolicyFor(route.provider) !== null;
           const prepaid = sendBudgetState.pendingHopPermit;
           const configuredTotal = refetchTransientPolicy?.attempts;
-          const refetchCap = transientSendCapFor(configuredTotal,
-            sendBudgetState.targetSendsUsed - (prepaid ? 1 : 0));
+          const refetchCap = transientSendCapFor(configuredTotal, sendBudgetState.targetSendsUsed);
           // An exact total includes a booked hop, even when it consumed the last base slot.
           // Keep that funded send while forbidding the final reserve from widening the total.
           const prepaidLastSlot = helperCountsSends && configuredTotal !== undefined && prepaid
