@@ -27,6 +27,7 @@ afterEach(() => {
 });
 
 // Only credential selection is synthetic; the hosted loop, dispatch budget and journal are real.
+/** Replace only credential selection while exercising real hosted dispatch and settlement. */
 async function withSyntheticRotation(run: (rotated: () => boolean) => Promise<void>, onRotation = () => {}) {
   let rotated = false;
   const prepare = transport.prepareResponsesTransport;
@@ -150,6 +151,7 @@ for (const claimed of [false, true]) for (const sent of [false, true]) test(`sid
   } finally { resume(); sidecar.release(); translatorBudget.dispose(); }
 });
 
+/** Reserve a recovery hop after a consumed initial send with observable refunds. */
 function hopOwner(maxTargetTransitions = 1) {
   let charges = 0, refunds = 0;
   const budget = createRequestExecutionBudget({ baseSendAllowance: 1, maxTotalModelSends: 2,

@@ -24,12 +24,15 @@ test("hosted fixture restores both homes and removes directories even when owner
   });
 });
 
+/** Expose a producer gate so tests control dispatch after response construction. */
 function deferred() { let resolve!: () => void; const promise = new Promise<void>(r => { resolve = r; }); return { promise, resolve }; }
+/** Fail a stalled synthetic producer and always clear its deadline timer. */
 async function bounded<T>(promise: Promise<T>): Promise<T> {
   let timer: ReturnType<typeof setTimeout>;
   return Promise.race([promise, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("synthetic producer did not finish")), 2000); })])
     .finally(() => clearTimeout(timer));
 }
+/** Exercise adapter-owned physical admission and consume the synthetic response. */
 async function dispatch(incoming: IncomingMeta) {
   const send = createAdapterPhysicalSend({ sendBudget: incoming.sendBudget, executor: incoming.providerFetch,
     abortSignal: incoming.abortSignal, onPhysicalSend: incoming.onPhysicalSend });

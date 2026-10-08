@@ -46,6 +46,7 @@ afterEach(async () => {
   codex.restore(); removeTreeWithRetry(home);
 });
 
+/** Capture physical inference bodies on a loopback server with a fixed response status. */
 function upstream(status = 200) {
   const bodies: Record<string, unknown>[] = [];
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(req) {
@@ -56,11 +57,13 @@ function upstream(status = 200) {
   servers.push(server);
   return { bodies, baseUrl: new URL("/v1", server.url).href };
 }
+/** Configure the synthetic Responses provider with an optional transient-send ceiling. */
 function provider(baseUrl: string, attempts: number | undefined = 1): OcxProviderConfig {
   return { adapter: "openai-responses", baseUrl, allowPrivateNetwork: true,
     apiKey: "fixture-inference-key", authMode: "key", liveModels: false, models: ["m"],
     reasoningEfforts: ["low", "high"], ...(attempts === undefined ? {} : { transientRetryOn5xx: { attempts } }) };
 }
+/** Observe shared charges and refunds independently of synthetic judge calls. */
 function fixture(strategy: "jev" | "failover" | "direct", status = 200, attempts: number | undefined = 1) {
   const inference = upstream(status);
   let judgeCalls = 0;
@@ -74,6 +77,7 @@ function fixture(strategy: "jev" | "failover" | "direct", status = 200, attempts
   const budget = createRequestExecutionBudget(undefined, undefined, observer);
   return { config, inference, budget, get judgeCalls() { return judgeCalls; }, get charges() { return charges; }, get refunds() { return refunds; } };
 }
+/** Dispatch and consume one synthetic request through the real Responses handler. */
 async function send(f: ReturnType<typeof fixture>, signal?: AbortSignal) {
   const log: RequestLogContext = { model: "", provider: "" };
   const req = new Request("http://localhost/v1/responses", { method: "POST", headers: { "content-type": "application/json" },
@@ -287,6 +291,7 @@ test("streaming runTurn producer retains prepaid send after ingress returns", as
   } finally { finish(); adapter.mockRestore(); }
 });
 
+/** Construct a child-local owner over one externally counted shared reservation. */
 function prepaidOwner() {
   let charges = 0, refunds = 0;
   const policy = { maxTotalModelSends: 3, baseSendAllowance: 3, finalRecoveryAllowance: 0,
@@ -395,5 +400,19 @@ for (const dispatch of [false, true]) test(`adapter claims prepaid send once and
       allowed: false, reason: "target-transition-exhausted" });
     f.owner.noteTransientSends(1); // No external booking remains to swallow this unrelated send.
     expect(f.budget.used).toBe(3); expect(f.charges).toBe(3);
+  } finally { f.dispose(); }
+});
+
+test("released initial booking followed by a transient report charges exactly one send", () => {
+  const f = prepaidOwner();
+  try {
+    f.permit.release();
+    expect(f.budget.used).toBe(0); expect(f.charges - f.refunds).toBe(0);
+    f.owner.noteTransientSends(1);
+    expect(f.budget.used).toBe(1); expect(f.charges - f.refunds).toBe(1);
+    expect(f.charges).toBe(2); expect(f.refunds).toBe(1);
+    expect(f.owner.targetSendsUsed).toBe(1);
+    f.permit.release();
+    expect(f.budget.used).toBe(1); expect(f.refunds).toBe(1);
   } finally { f.dispose(); }
 });
