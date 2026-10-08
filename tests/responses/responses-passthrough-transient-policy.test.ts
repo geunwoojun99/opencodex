@@ -57,7 +57,10 @@ describe("the Responses passthrough lane reads the provider transient policy", (
     const allowanceBacked = occurrences(packed, "attempts:allowance.attempts");
     const prepaidInitial = occurrences(packed, "attempts:sendBudgetState.initialSendAllowance(transientSendAttempts())");
     expect(prepaidInitial).toBe(1);
-    expect(packed).toContain("onPhysicalDispatch:sendBudgetState.noteInitialDispatch");
+    // Combo-owned, non-enforced sends settle at physical dispatch; every other send keeps the
+    // shared reporter, so exactly one of the two accounts for any given send.
+    expect(packed).toContain("onPhysicalDispatch:receiptMode?sendBudgetState.noteInitialDispatch:undefined");
+    expect(packed).toContain("...(receiptMode?{}:{onSendsConsumed:transientSendReporter()})");
     expect(budgeted + allowanceBacked + prepaidInitial).toBe(sites);
 
     // The rebuild leg spends a recovery allowance rather than the base budget directly, so its

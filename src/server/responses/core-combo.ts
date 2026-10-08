@@ -52,11 +52,10 @@ import { routeConcreteModel, comboRouteDecisionTrace } from "../../router";
 import { memoryModelRouteReason } from "./memory-models";
 import { poolAccountProviderLabel } from "../../providers/label";
 import { getAccountSet } from "../../oauth/store";
+import { configuredAnthropicInstance } from "../../providers/anthropic-instance";
 import {
+  anthropicRoutingFor,
   formatAnthropicProviderForLog,
-  getAnthropicAccountHealthSnapshot,
-  getAnthropicPoolRetryAfterSeconds,
-  getEligibleAnthropicAccounts,
 } from "../../oauth/anthropic-routing";
 import { codexAccountLogLabel } from "../../codex/account-label";
 import { codexQuotaScopeForModel, getCodexQuotaHealthSnapshot } from "../../codex/routing";
@@ -103,7 +102,7 @@ import {
 import { preflightComboStreamResponse } from "./combo-stream-preflight";
 import { streamingContextOverflowResponse, jsonContextOverflowResponse } from "./context-overflow";
 import { mandatoryResponsesReasoningReplayUnavailable } from "./core-replay";
-import { settleOperatorReplacement, SendBudgetExhaustedError } from "../../lib/upstream-retry";
+import { settleOperatorReplacement } from "../../lib/upstream-retry";
 import { createComboProtocolLanes, dispatchNativeComboChild } from "./core-combo-native";
 import { createJevModelInvoker } from "./jev-model-invoke";
 import { comboRequestedEffortLabel } from "./combo-requested-effort";
@@ -118,10 +117,11 @@ export const COMBO_TARGET_BASE_SENDS = CODEX_TEXT_GUARDED_BUDGET_POLICY.baseSend
 
 function cooledPoolAccountLabel(config: OcxConfig, providerName: string, modelId: string, label: string | undefined): string | undefined {
   if (!label) return undefined;
-  if (providerName === "anthropic") {
-    const matches = getAccountSet("anthropic")?.accounts.filter(account =>
-      formatAnthropicProviderForLog("anthropic", account.id) === label) ?? [];
-    return matches.length === 1 && getAnthropicAccountHealthSnapshot(matches[0]!.id) ? label : undefined;
+  const instance = configuredAnthropicInstance(config, providerName);
+  if (instance && config.providers[providerName]?.authMode === "oauth") {
+    const matches = getAccountSet(instance)?.accounts.filter(account =>
+      formatAnthropicProviderForLog(instance, account.id) === label) ?? [];
+    return matches.length === 1 && anthropicRoutingFor(instance).getAnthropicAccountHealthSnapshot(matches[0]!.id) ? label : undefined;
   }
   const provider = config.providers[providerName];
   if (!provider || !isCanonicalOpenAiForwardProvider(provider)) return undefined;
@@ -152,12 +152,13 @@ export function isAnthropicPoolLocalRefusal(
   failedAccount: string | undefined,
   now = Date.now(),
 ): boolean {
-  return providerName === "anthropic"
+  const instance = configuredAnthropicInstance(config, providerName);
+  return instance !== undefined
     && config.providers[providerName]?.authMode === "oauth"
     && status === 429
     && failedAccount === undefined
-    && getEligibleAnthropicAccounts(now).length === 0
-    && getAnthropicPoolRetryAfterSeconds(now) !== null;
+    && anthropicRoutingFor(instance).getEligibleAnthropicAccounts(now).length === 0
+    && anthropicRoutingFor(instance).getAnthropicPoolRetryAfterSeconds(now) !== null;
 }
 
 /**
@@ -713,12 +714,17 @@ export async function executeComboResponses(
   while (pick) {
     if (options.abortSignal?.aborted) return clientCancelledResponse();
     const firstComboTarget = comboTargetsDispatched === 0;
+    const targetRoute = routeConcreteModel(config, `${pick.target.provider}/${pick.target.model}`);
+    // The inherited spend tracker observes this parent log, before the child has its own label.
+    logCtx.spendPoolId = targetRoute.providerName;
     // Derive the target's allowance before booking its initial send; the booking occupies it.
     const targetSendBudget = comboSendScope
       ? comboTargetSendBudget(comboSendScope, combo.targets.length - 1 - comboTargetsDispatched)
       : options.sendBudget;
     // Every target prepays one send. Only its child may consume that booking; later targets
     // remain bounded by the shared total, transition ledger and per-target holdback.
+    // `countedExternally` is required: the child charges its own physical sends against this
+    // booking through the exact permit, and charging here as well would halve the cap.
     const hopDecision = comboSendScope?.reserveDispatch({
       sendClass: firstComboTarget ? "initial" : "combo-failover",
       targetKey: `${pick.target.provider}/${pick.target.model}`,
@@ -744,7 +750,6 @@ export async function executeComboResponses(
       ...(logCtx.conversationId ? { conversationId: logCtx.conversationId } : {}),
       ...(logCtx.surface ? { surface: logCtx.surface } : {}),
     };
-    const targetRoute = routeConcreteModel(config, `${pick.target.provider}/${pick.target.model}`);
     const targetReasoningEfforts = supportedLadderFor({
       provider: targetRoute.provider,
       modelId: targetRoute.modelId,
@@ -861,13 +866,11 @@ export async function executeComboResponses(
       response = nativeChild ? await dispatchNativeComboChild({
         source: options.protocolSource!,
         plan: nativeChild,
+        comboDispatchPermit: hopDecision?.allowed ? hopDecision.permit : undefined,
         logCtx,
         childLog,
         attempt,
         startedAt: started,
-        onInitialDispatch: initialSend ? () => {
-          if (!initialSend.permit.assumeCharge()) throw new SendBudgetExhaustedError();
-        } : undefined,
         ...(options.turnAdmissionLease ? { turnAdmissionLease: options.turnAdmissionLease } : {}),
         // Attempt-relative TTFT, recorded here for the same reason as the bridge child below.
         onFirstOutput: () => {
@@ -890,6 +893,7 @@ export async function executeComboResponses(
         sendBudget: targetSendBudget,
         comboAttempt: true,
         comboInitialSend: initialSend,
+        comboDispatchPermit: hopDecision?.allowed ? hopDecision.permit : undefined,
         comboReplaySnapshot,
         deferCodexResetDerivedCooldown,
         // Attempt-relative TTFT is recorded HERE (not via childLog.firstOutputMs — a later

@@ -71,7 +71,7 @@ export interface HandleResponsesOptions {
   compactionRecoveryKind?: "compaction-v1" | "compaction-v2";
   onCompactionRecoveryRoute?: (route: RouteResult) => void;
   onCompactionRecoveryAdapterEvent?: (event: AdapterEvent) => void;
-  /** Physical-send reports already delivered to the shared used setter, including booking settlement. */
+  /** Physical-send reports already delivered to the shared ledger, including exact booking settlement. */
   onCompactionRecoverySendsReported?: (count: number) => void;
   /** Private holder for the Kiro serving-account lease. */
   accountLoad?: { lease: AccountLease | null; cancelled: boolean };
@@ -160,6 +160,8 @@ export interface HandleResponsesOptions {
   comboAttempt?: boolean;
   /** Child-owned prepaid initial send; capacity remains charged until dispatch or unsent release. */
   comboInitialSend?: { permit: SingleUseDispatchPermit; producerOwned?: boolean };
+  /** Exact externally booked combo hop, used for its child's spend preflight and send reports. */
+  comboDispatchPermit?: SingleUseDispatchPermit;
   /** Internal handoff: this combo was selected by shadow-call interception. */
   shadowCallIntercepted?: boolean;
   /** Internal handoff: the memory phase this turn belongs to, so combo children keep its routing. */
