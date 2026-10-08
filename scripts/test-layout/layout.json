@@ -299,7 +299,7 @@
     "protocol-direct-encoders-stall-disabled.test.ts": "responses",
     "protocol-direct-encoders-local-upstream.test.ts": "responses",
     "protocol-direct-encoders-messages.test.ts": "responses",
-    "chat-native-combo.test.ts": "responses",
+    "chat-native-combo.test.ts": "responses", "jev-initial-effort-wire.test.ts": "responses",
     "messages-native-eligibility.test.ts": "responses",
     "messages-native-bridge-policy.test.ts": "responses",
     "messages-native-oauth-eligibility.test.ts": "responses",
