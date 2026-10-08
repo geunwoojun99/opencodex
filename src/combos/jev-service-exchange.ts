@@ -180,8 +180,8 @@ function prepareRequestBody(
  *
  * This function owns caller cancellation: an aborted `options.signal` rejects with its reason by
  * identity, never as a gate. It is checked before endpoint, credential or `prepare` work, after
- * endpoint resolution and preparation (including failures), after POST, redirect inspection and
- * response reads, and when `parse` returns or throws. Only the caller's signal counts; expiry of
+ * endpoint resolution and preparation (including failures), after POST, redirect inspection, HTTP
+ * error-body cleanup and response reads, and when `parse` returns or throws. Only the caller's signal counts; expiry of
  * the separate decision deadline remains a `timeout` gate.
  */
 export async function exchangeJevDecision<T>(
@@ -237,6 +237,7 @@ export async function exchangeJevDecision<T>(
     if (redirectError) return { gate: "redirect" };
     if (!response.ok) {
       try { void response.body?.cancel().catch(() => undefined); } catch { /* best effort */ }
+      if (options.signal?.aborted) throw options.signal.reason;
       return { gate: "http" };
     }
 

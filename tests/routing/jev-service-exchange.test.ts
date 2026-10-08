@@ -309,6 +309,75 @@ describe("bounded JEV service exchange", () => {
     }) }), prepare, parse)).rejects.toBe(reason);
   });
 
+  test("caller abort during HTTP body cleanup rejects by identity in the exchange and actual route", async () => {
+    for (const resolveRoute of [false, true]) for (const cleanup of ["return", "throw", "pending"] as const) {
+      const caller = new AbortController();
+      const reason = { caller: `stopped during HTTP cleanup: ${cleanup}` };
+      let cancels = 0;
+      let parses = 0;
+      const post: Post = async () => new Response(new ReadableStream<Uint8Array>({
+        cancel() {
+          cancels++;
+          caller.abort(reason);
+          if (cleanup === "throw") throw new Error("synthetic cleanup failure");
+          if (cleanup === "pending") return new Promise<void>(() => {});
+        },
+      }), { status: 402 });
+      const opts = options({ signal: caller.signal, post });
+      const pending = resolveRoute
+        ? resolveJevDecision({ ...opts, body: { input: "A synthetic task." }, candidates, fallback })
+        : exchangeJevDecision(opts, prepare, payload => { parses++; return payload; });
+      await expect(pending).rejects.toBe(reason);
+      expect(cancels).toBe(1);
+      expect(parses).toBe(0);
+    }
+    const caller = new AbortController();
+    const reason = { caller: "stopped in a synchronously throwing cancel method" };
+    const response = new Response("synthetic HTTP error", { status: 402 });
+    response.body!.cancel = () => { caller.abort(reason); throw new Error("synthetic synchronous cleanup failure"); };
+    await expect(exchangeJevDecision(options({ signal: caller.signal, post: async () => response }), prepare, parse)).rejects.toBe(reason);
+  });
+
+  test("HTTP cleanup remains best effort and non-waiting without caller cancellation", async () => {
+    for (const resolveRoute of [false, true]) for (const cleanup of ["return", "throw", "pending"] as const) {
+      const caller = new AbortController();
+      let cancels = 0;
+      let parses = 0;
+      const opts = options({ signal: caller.signal, post: async () => new Response(new ReadableStream<Uint8Array>({
+        cancel() {
+          cancels++;
+          if (cleanup === "throw") throw new Error("synthetic cleanup failure");
+          if (cleanup === "pending") return new Promise<void>(() => {});
+        },
+      }), { status: 402 }) });
+      const result = resolveRoute
+        ? await resolveJevDecision({ ...opts, body: { input: "A synthetic task." }, candidates, fallback })
+        : await exchangeJevDecision(opts, prepare, payload => { parses++; return payload; });
+      expect(result).toMatchObject({ gate: "http" });
+      if (resolveRoute) expect(result).toMatchObject(fallback);
+      expect(caller.signal.aborted).toBe(false);
+      expect(cancels).toBe(1);
+      expect(parses).toBe(0);
+    }
+    // Even a non-conforming cancel method that throws synchronously is still best effort.
+    const response = new Response("synthetic HTTP error", { status: 402 });
+    response.body!.cancel = () => { throw new Error("synthetic synchronous cleanup failure"); };
+    expect(await exchangeJevDecision(options({ post: async () => response }), prepare, parse)).toEqual({ gate: "http" });
+  });
+
+  test("caller abort during oversized-response cleanup beats the malformed gate", async () => {
+    const caller = new AbortController();
+    const reason = { caller: "stopped during oversized-response cleanup" };
+    let cancels = 0;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) { controller.enqueue(new Uint8Array(65_537)); },
+      cancel() { cancels++; caller.abort(reason); },
+    });
+    await expect(exchangeJevDecision(options({ signal: caller.signal, post: async () => new Response(body) }), prepare, parse))
+      .rejects.toBe(reason);
+    expect(cancels).toBe(1);
+  });
+
   test("caller cancellation stays separate from the decision deadline", async () => {
     const descriptor = Object.getOwnPropertyDescriptor(AbortSignal, "timeout")!;
     let deadline = new AbortController();
