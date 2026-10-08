@@ -166,6 +166,9 @@ export async function prepareAdapterExchange(
     | "workflowRootId"
     | "claimAmbiguousResend"
     | "sendsUsed"
+    | "targetSendsUsed"
+    | "initialSendAllowance"
+    | "noteInitialDispatch"
   >,
 ) {
   const { options, config, logCtx, req } = requestContext;
@@ -368,18 +371,15 @@ export async function prepareAdapterExchange(
       // Its configured initial ceiling is target-local; the shared remainder below still
       // accounts for earlier targets without deducting their sends from this target twice.
       const initialSendCap = transientPolicy || resetReplayPolicyFor(route.provider)
+        || (options.comboAttempt && route.provider.adapter === "google")
         ? transientSendCapFor(transientPolicy?.attempts,
           (options.comboAttempt || compactPrepaid) ? 0 : sendBudgetState.sendsUsed)
         : 1;
       const fetchWithRetryPolicy = (route.provider.adapter === "google" || transientPolicy)
         ? fetchWithTransientRetry
         : fetchWithResetRetry;
-      upstreamResponse = await fetchWithRetryPolicy(
+      try { upstreamResponse = await fetchWithRetryPolicy(
         recovery => {
-          if (compactPrepaid && !compactPrepaidUsed) {
-            if (!compactPrepaid.use()) throw new SendBudgetExhaustedError(safeHostLabel(builtInitialRequest.url));
-            compactPrepaidUsed = true;
-          }
           transportState.noteRoutedAttemptSend(inputTokenEstimate, recovery);
           return fetchWithHeaderTimeout(builtInitialRequest.url, applyUpstreamRecoveryInit({
             method: builtInitialRequest.method,
@@ -390,6 +390,14 @@ export async function prepareAdapterExchange(
               dispatchOverride: oauthDispatch(builtInitialRequest),
               providerName: route.providerName,
               modelId: route.modelId,
+              onPhysicalDispatch: () => {
+                // Preserve the unconfigured direct-adapter accounting contract; Combo admission
+                // and explicit retry/compaction budgets require a receipt for their booked send.
+                if (transientPolicy || resetReplayPolicyFor(route.provider) || compactPrepaid || options.comboAttempt) {
+                  sendBudgetState.noteInitialDispatch(compactPrepaid && !compactPrepaidUsed ? compactPrepaid : undefined);
+                  compactPrepaidUsed = true;
+                }
+              },
               beforeDispatch: isCanonicalOpenAiForwardProvider(route.provider)
                 ? createCodexAuthDispatchGuard(admissionState.authCtx, options.codexAuthPolicy ?? config, route.modelId, options.admission, options.visionDescribeTerminal === true) : undefined,
             }));
@@ -398,16 +406,15 @@ export async function prepareAdapterExchange(
           abortSignal: upstream.signal,
           label: safeHostLabel(builtInitialRequest.url),
           claimAmbiguousResend: claimPreHeaderResend,
-          ...(transientPolicy || resetReplayPolicyFor(route.provider) || compactPrepaid
+          ...(transientPolicy || resetReplayPolicyFor(route.provider) || compactPrepaid || options.comboAttempt
             ? {
               // A pending compaction permit already booked this leg's first physical send.
               attempts: Math.min(initialSendCap,
-                remainingTransientSendBudget(initialSendCap) + (compactPrepaid ? 1 : 0)),
-              onSendsConsumed: noteTransientSends,
+                sendBudgetState.initialSendAllowance(initialSendCap) + (compactPrepaid ? 1 : 0)),
             }
             : {}),
         },
-      );
+      ); } finally { compactPrepaid?.release(); }
     }
   } catch (err) {
     cleanupUpstreamAbort();
@@ -585,7 +592,7 @@ export async function prepareAdapterExchange(
           const prepaid = sendBudgetState.pendingHopPermit;
           const configuredTotal = refetchTransientPolicy?.attempts;
           const refetchCap = transientSendCapFor(configuredTotal,
-            sendBudgetState.sendsUsed - (prepaid ? 1 : 0));
+            sendBudgetState.targetSendsUsed - (prepaid ? 1 : 0));
           // An exact total includes a booked hop, even when it consumed the last base slot.
           // Keep that funded send while forbidding the final reserve from widening the total.
           const prepaidLastSlot = helperCountsSends && configuredTotal !== undefined && prepaid

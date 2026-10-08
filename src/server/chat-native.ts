@@ -198,6 +198,8 @@ export interface NativeChatExecution extends HandleNativeChatOptions {
    * the parent row, replace the one the final log settles.
    */
   sendBudget?: RequestExecutionBudget;
+  /** Confirm the owning Combo child's prepaid booking before the first external send report. */
+  onInitialDispatch?: () => void;
   /** Replaces the request-relative first-output mark; a combo child records its own. */
   onFirstOutput?: () => void;
   /** The lease a streamed body holds; defaults to `logIds.turnAdmissionLease`. */
@@ -254,6 +256,7 @@ export function createNativeChatComboSource(input: {
       translatorBudget: input.translatorBudget,
       finishLog: child.finishLog,
       sendBudget: child.sendBudget,
+      onInitialDispatch: child.onInitialDispatch,
       onFirstOutput: child.onFirstOutput,
       ...(child.turnAdmissionLease ? { turnAdmissionLease: child.turnAdmissionLease } : {}),
     }, child.attemptHandle),
@@ -356,14 +359,14 @@ export async function runNativeChatAttempt(
   // key rotation so recovery cannot replace the ceiling along with the active credential.
   const requestTransientPolicy = transientRetryPolicyFor(activeProvider);
   let transientSendsUsed = 0;
-  // A combo child also answers to the request's shared base allowance, at the cap its own ladder
-  // uses. Its first send is exempt: the combo reserved it before dispatching this target.
+  // A Combo child's initial send is prepaid, not exempt from the shared ceiling. Only its
+  // owning callback exposes that one booking in addition to the still-unspent allowance.
   const sharedSendCap = requestTransientPolicy?.attempts ?? TRANSIENT_RETRY_MAX_ATTEMPTS;
   let physicalSends = 0;
   const remainingSharedSends = (): number => {
     if (!sendBudget) return Number.POSITIVE_INFINITY;
     const remaining = sendBudget.remainingBaseSends(sharedSendCap);
-    return physicalSends === 0 ? Math.max(1, remaining) : remaining;
+    return Math.min(sharedSendCap, remaining + (physicalSends === 0 && execution.onInitialDispatch ? 1 : 0));
   };
   const remainingTransientSends = (): number => Math.min(
     requestTransientPolicy
@@ -428,6 +431,18 @@ export async function runNativeChatAttempt(
           providerFetch(activeProvider, undefined, {
             providerName: route.providerName,
             modelId: route.modelId,
+            onPhysicalDispatch: () => {
+              if (sendBudget) {
+                if (physicalSends === 0 && execution.onInitialDispatch) execution.onInitialDispatch();
+                else {
+                  const booking = sendBudget.reserveDispatch({ sendClass: "transient",
+                    targetKey: sendBudget.lastTargetKey ?? `${route.providerName}/${route.modelId}` });
+                  if (!booking.allowed || !booking.permit.use()) throw new SendBudgetExhaustedError(safeHostLabel(request.url));
+                }
+                physicalSends += 1;
+              } else if (!spendTracker?.charge()) throw new NativeChatSpendRefusal();
+              noteProviderAttemptSend(logCtx, route.providerName, activeProvider, logCtx.usageLogInputTokens, transportRecovery ?? recovery);
+            },
             dispatchOverride: async (_input, init, execute) => {
               if (!providerApiKeySelectionIsCurrent(config, route.providerName, activeProvider)) {
                 const current = resolveCurrentProviderApiKeyTransport(config, route.providerName, activeProvider);
@@ -450,16 +465,6 @@ export async function runNativeChatAttempt(
               const encoding = new Headers(init.headers).get("accept-encoding");
               if (!headers.has("accept-encoding") && encoding) headers.set("accept-encoding", encoding);
               if (init.signal?.aborted) throw init.signal.reason;
-              if (sendBudget) {
-                // Backstop for sends the helper cannot see coming (a reset replay). The first
-                // report settles the combo's booking; each later one is charged and booked.
-                if (physicalSends > 0 && sendBudget.remainingBaseSends(sharedSendCap) <= 0) {
-                  throw new SendBudgetExhaustedError(safeHostLabel(request.url));
-                }
-                physicalSends += 1;
-                sendBudget.used += 1;
-              } else if (!spendTracker?.charge()) throw new NativeChatSpendRefusal();
-              noteProviderAttemptSend(logCtx, route.providerName, activeProvider, logCtx.usageLogInputTokens, transportRecovery ?? recovery);
               // A reselected provider transport is still a physical send: the connection policy
               // and manual-redirect ownership wrap the selected implementation (#4992).
               const dispatched = await sendWithConnectionPolicy(

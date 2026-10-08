@@ -103,7 +103,7 @@ import {
 import { preflightComboStreamResponse } from "./combo-stream-preflight";
 import { streamingContextOverflowResponse, jsonContextOverflowResponse } from "./context-overflow";
 import { mandatoryResponsesReasoningReplayUnavailable } from "./core-replay";
-import { settleOperatorReplacement } from "../../lib/upstream-retry";
+import { settleOperatorReplacement, SendBudgetExhaustedError } from "../../lib/upstream-retry";
 import { createComboProtocolLanes, dispatchNativeComboChild } from "./core-combo-native";
 import { createJevModelInvoker } from "./jev-model-invoke";
 import { comboRequestedEffortLabel } from "./combo-requested-effort";
@@ -713,30 +713,30 @@ export async function executeComboResponses(
   while (pick) {
     if (options.abortSignal?.aborted) return clientCancelledResponse();
     const firstComboTarget = comboTargetsDispatched === 0;
-    // The first target seeds the ledger's target identity and charges nothing; every later one
-    // is a real transition, refused once the declared hops, the alternate-target ledger or the
-    // request total are spent. `countedExternally` is required: the child charges its own
-    // physical sends, and charging here as well would halve the cap without saying so.
+    // Derive the target's allowance before booking its initial send; the booking occupies it.
+    const targetSendBudget = comboSendScope
+      ? comboTargetSendBudget(comboSendScope, combo.targets.length - 1 - comboTargetsDispatched)
+      : options.sendBudget;
+    // Every target prepays one send. Only its child may consume that booking; later targets
+    // remain bounded by the shared total, transition ledger and per-target holdback.
     const hopDecision = comboSendScope?.reserveDispatch({
       sendClass: firstComboTarget ? "initial" : "combo-failover",
       targetKey: `${pick.target.provider}/${pick.target.model}`,
       countedExternally: true,
     });
-    if (hopDecision && hopDecision.allowed) hopDecision.permit.use();
-    else if (hopDecision && firstComboTarget) {
+    if (hopDecision && !hopDecision.allowed && firstComboTarget) {
       // A refused initial reservation authorizes no child send and has no upstream failure to return.
       return formatErrorResponse(429, SEND_BUDGET_EXHAUSTED_CODE, "request send budget exhausted before combo dispatch");
     }
-    else if (hopDecision) {
+    else if (hopDecision && !hopDecision.allowed) {
       // Out of budget is not this target's failure. The established exhaustion contract is to
       // return the last real upstream answer with its status, headers and any quota body
       // intact rather than to mint a synthetic error, and a later target only exists because
       // an earlier one already recorded one.
       return exhaustedFailure();
     }
-    const targetSendBudget = comboSendScope
-      ? comboTargetSendBudget(comboSendScope, combo.targets.length - 1 - comboTargetsDispatched)
-      : options.sendBudget;
+    const initialSend = hopDecision?.allowed ? { permit: hopDecision.permit, producerOwned: false } : undefined;
+    try {
     comboTargetsDispatched += 1;
     const childLog: RequestLogContext = {
       model: pick.target.model,
@@ -865,6 +865,9 @@ export async function executeComboResponses(
         childLog,
         attempt,
         startedAt: started,
+        onInitialDispatch: initialSend ? () => {
+          if (!initialSend.permit.assumeCharge()) throw new SendBudgetExhaustedError();
+        } : undefined,
         ...(options.turnAdmissionLease ? { turnAdmissionLease: options.turnAdmissionLease } : {}),
         // Attempt-relative TTFT, recorded here for the same reason as the bridge child below.
         onFirstOutput: () => {
@@ -886,6 +889,7 @@ export async function executeComboResponses(
         // parent arrived with.
         sendBudget: targetSendBudget,
         comboAttempt: true,
+        comboInitialSend: initialSend,
         comboReplaySnapshot,
         deferCodexResetDerivedCooldown,
         // Attempt-relative TTFT is recorded HERE (not via childLog.firstOutputMs — a later
@@ -1179,6 +1183,11 @@ export async function executeComboResponses(
       }
       // Waiting or recovery may have observed cancellation after the check above.
       if (options.abortSignal?.aborted) return clientCancelledResponse();
+    }
+    } finally {
+      // External receipts make release a no-op after real work. runTurn owns its asynchronous
+      // producer; core transfers cleanup there before returning a streaming response.
+      if (!initialSend?.producerOwned) initialSend?.permit.release();
     }
   }
   const failure = exhaustedFailure();

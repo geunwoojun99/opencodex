@@ -8,7 +8,7 @@ import {
 import { workflowRefusalResponse } from "../workflow-refusal";
 import type { AttemptRecoveryKind, AttemptRecoveryWithheld } from "../../usage/log";
 import { noteAttemptRecoveryWithheld, noteAttemptSend } from "../request-log";
-import { TRANSIENT_RETRY_MAX_ATTEMPTS } from "../../lib/upstream-retry";
+import { TRANSIENT_RETRY_MAX_ATTEMPTS, SendBudgetExhaustedError } from "../../lib/upstream-retry";
 import type {
   DispatchDecision,
   DispatchIntent,
@@ -57,8 +57,12 @@ export function createResponsesSendBudget(
   // sends once per child seven hundred times, so every send charged to the request is charged
   // to the root as well (#4546).
   const workflowRootId = req.headers.get("x-codex-parent-thread-id")?.trim() || undefined;
+  let initialPermit = options.comboInitialSend?.permit;
+  // A Combo target owns its configured total; preceding targets still occupy the shared ledger.
+  const initialTargetSpend = initialPermit ? Math.max(0, sendBudget.used - 1) : 0;
   const noteTransientSends = (used: number): void => {
     const charged = Math.max(0, used);
+    if (charged > 0) { initialPermit?.use(); initialPermit = undefined; }
     sendBudget.used += charged;
     options.onCompactionRecoverySendsReported?.(charged);
     chargeWorkflowSends(workflowRootId, charged);
@@ -171,21 +175,27 @@ export function createResponsesSendBudget(
    * The hop hands its reservation down through `pendingHopPermit`, the same seam the
    * passthrough ladder already uses, and this view spends it on the adapter's FIRST
    * reservation. Every later send in that ladder is a new physical send and is charged
-   * normally. The refundable view below keeps an unused hop open until executor invocation;
-   * its adapter release hands back an abandoned replay. The ordinary view retains early
-   * settlement for existing callers.
+   * normally. Claiming preserves the refundable single-use booking until physical dispatch;
+   * an abandoned replay releases only that exact booking.
    */
-  const claimHopPermit = (): SingleUseDispatchPermit | undefined => {
-    const permit = pendingHopPermit;
-    pendingHopPermit = undefined;
-    return permit;
+  const permits = {
+    claimInitialPermit: () => {
+      const permit = initialPermit;
+      initialPermit = undefined;
+      return permit;
+    },
+    claimHopPermit: () => {
+      const permit = pendingHopPermit;
+      pendingHopPermit = undefined;
+      return permit;
+    },
   };
-  const adapterDispatchBudget: RequestExecutionBudget | undefined = adapterSendBudget === undefined
-    ? undefined : adapterDispatchBudgetView(adapterSendBudget, { claimHopPermit });
-  // Opt in only where the adapter's executor is the confirmation boundary. Ordinary callers
-  // keep the existing early settlement contract, including already-settled permit fallback.
-  const refundableAdapterDispatchBudget: RequestExecutionBudget | undefined = adapterSendBudget === undefined
-    ? undefined : adapterDispatchBudgetView(adapterSendBudget, { claimHopPermit }, true);
+  const adapterDispatchBudget = adapterSendBudget === undefined
+    ? undefined : adapterDispatchBudgetView(adapterSendBudget, permits);
+  // Preserve the existing opted-in view for direct callers, including its admitted replacement
+  // of an already-settled hop. Exact-owned Combo and sidecar handoffs use the ordinary view.
+  const refundableAdapterDispatchBudget = adapterSendBudget === undefined
+    ? undefined : adapterDispatchBudgetView(adapterSendBudget, permits, true);
   /**
    * How many sends a recovery leg may make, and the permit that authorises the last one.
    *
@@ -271,12 +281,34 @@ export function createResponsesSendBudget(
     workflowRootId,
     noteTransientSends,
     remainingTransientSendBudget,
+    /** Only this child's prepaid send, not every pending external booking, is spendable here. */
+    initialSendAllowance: (cap: number): number => Math.min(cap,
+      remainingTransientSendBudget(cap) + (initialPermit ? 1 : 0)),
+    /** At final executor admission, settle only the owning booking or reserve this send. */
+    noteInitialDispatch: (prepaid = initialPermit): void => {
+      if (prepaid) {
+        if (!prepaid.assumeCharge()) throw new SendBudgetExhaustedError();
+        if (prepaid === initialPermit) initialPermit = undefined;
+      } else if (adapterSendBudget && (options.comboInitialSend || options.compactionRecoveryPermit)) {
+        const decision = adapterSendBudget.reserveDispatch({ sendClass: "transient",
+          targetKey: adapterSendBudget.lastTargetKey ?? `${logCtx.provider}/${logCtx.model}` });
+        if (!decision.allowed || !decision.permit.use()) throw new SendBudgetExhaustedError();
+      } else {
+        // Legacy direct callers can prebook without handing over a permit; keep their reporter.
+        noteTransientSends(1);
+        return;
+      }
+      options.onCompactionRecoverySendsReported?.(1);
+      chargeWorkflowSends(workflowRootId, 1);
+    },
+    get targetSendsUsed(): number {
+      return Math.max(0, sendBudget.used - initialTargetSpend - (initialPermit ? 1 : 0));
+    },
     /**
-     * Physical sends this logical request has already made.
+     * Charged sends, including open prepaid reservations, across this logical request.
      *
-     * A live getter, not a snapshot: it is read once per dispatch leg to resolve a configured
-     * ladder, and a value frozen at construction would answer for a request that had sent
-     * nothing.
+     * A live getter, not a completed-send snapshot. Initial ladders use the child's own
+     * prepaid allowance and target-local count; shared admission keeps every booking spent.
      */
     get sendsUsed(): number { return sendBudget.used; },
     adapterSendBudget,
@@ -314,8 +346,11 @@ export type ResponsesSendBudget = Exclude<ReturnType<typeof createResponsesSendB
  */
 function adapterDispatchBudgetView(
   budget: RequestExecutionBudget,
-  hop: { claimHopPermit: () => SingleUseDispatchPermit | undefined },
-  refundableHop = false,
+  hop: {
+    claimInitialPermit: () => SingleUseDispatchPermit | undefined;
+    claimHopPermit: () => SingleUseDispatchPermit | undefined;
+  },
+  legacyHopReplacement = false,
 ): RequestExecutionBudget {
   return {
     get used(): number { return budget.used; },
@@ -334,6 +369,18 @@ function adapterDispatchBudgetView(
       // A dispatch whose upstream state is unknown is refused on its own merits. A hop that
       // already paid does not make an unsafe replay safe, so that check stays with the budget.
       if (intent.replaySafe !== false) {
+        // The Combo reserves a logical provider/model identity. The child's first actual
+        // endpoint is not a recovery transition; retain the original refundable permit.
+        const initialPermit = hop.claimInitialPermit();
+        if (initialPermit) {
+          budget.bindPrepaidTarget?.(intent.targetKey);
+          return { allowed: true, permit: {
+            sendClass: initialPermit.sendClass,
+            use: () => initialPermit.assumeCharge(),
+            assumeCharge: () => initialPermit.assumeCharge(),
+            release: () => initialPermit.release(),
+          } };
+        }
         const hopPermit = hop.claimHopPermit();
         if (hopPermit && intent.targetKey !== budget.lastTargetKey) {
           // The rotated credential can select a different regional endpoint. Replace the
@@ -342,31 +389,30 @@ function adapterDispatchBudgetView(
           hopPermit.release();
           return budget.reserveDispatch({ ...intent, sendClass: hopPermit.sendClass });
         }
-        if (hopPermit !== undefined && (refundableHop || hopPermit.assumeCharge())) {
-          let settled = false;
-          const confirm = (): boolean => {
-            if (settled) return false;
-            settled = true;
-            // Admission can still reject this replay. Close its external booking only when
-            // the adapter invokes its executor, leaving release() able to refund it until then.
-            if (!refundableHop || hopPermit.assumeCharge()) return true;
-            // Preserve the old fallback for a permit another leg already settled.
-            const fresh = budget.reserveDispatch(intent);
-            return fresh.allowed && fresh.permit.assumeCharge();
-          };
-          return {
-            allowed: true,
-            permit: {
-              sendClass: hopPermit.sendClass,
-              use: confirm,
-              assumeCharge: confirm,
-              release: (): void => {
-                if (!refundableHop || settled) return;
-                settled = true;
-                hopPermit.release();
-              },
-            },
-          };
+        // Reservation precedes pacing and beforeDispatch. Transfer the exact open booking;
+        // only physical consumption closes external reporting and makes it non-refundable.
+        // The underlying permit enforces single use, including settlement by another owner.
+        if (hopPermit !== undefined) {
+          if (legacyHopReplacement) {
+            let settled = false;
+            const confirm = (): boolean => {
+              if (settled) return false;
+              settled = true;
+              if (hopPermit.assumeCharge()) return true;
+              const fresh = budget.reserveDispatch(intent);
+              return fresh.allowed && fresh.permit.assumeCharge();
+            };
+            return { allowed: true, permit: {
+              sendClass: hopPermit.sendClass, use: confirm, assumeCharge: confirm,
+              release: () => { if (!settled) { settled = true; hopPermit.release(); } },
+            } };
+          }
+          return { allowed: true, permit: {
+            sendClass: hopPermit.sendClass,
+            use: () => hopPermit.assumeCharge(),
+            assumeCharge: () => hopPermit.assumeCharge(),
+            release: () => hopPermit.release(),
+          } };
         }
       }
       return budget.reserveDispatch(intent);

@@ -157,6 +157,7 @@ export function codexWsUpstreamFetch(
   beforeDispatch?: (headers: Headers) => void,
   nativeControl?: NativeResponseControl,
   beforeContinuation?: () => Promise<void>,
+  onPhysicalDispatch?: () => void,
 ): Promise<Response> {
   const prepared = prepareCodexWsRequest(url, init);
   if (!prepared) return sseFallback(url, prepareCodexHttpInit(url, init));
@@ -229,7 +230,7 @@ export function codexWsUpstreamFetch(
   return codexWsExchange({
     session, url, init, prepared, sseFallback, onQuota, beforeDispatch,
     nativeControl: control,
-    beforeContinuation,
+    beforeContinuation, onPhysicalDispatch,
     bunVersion: typeof runtime === "string" ? runtime : runtime.version,
   });
 }

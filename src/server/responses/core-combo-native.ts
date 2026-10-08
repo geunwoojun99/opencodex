@@ -64,6 +64,8 @@ export interface NativeComboChildRun {
   sendBudget: RequestExecutionBudget;
   turnAdmissionLease?: AdmissionLease;
   onFirstOutput: () => void;
+  /** Confirm only this child's prepaid booking at its first physical-send report. */
+  onInitialDispatch?: () => void;
   /** Reports to the combo's child callbacks; it never writes the parent's final row itself. */
   finishLog: NativeChatFinishLog;
 }
@@ -278,6 +280,7 @@ export async function dispatchNativeComboChild(input: {
   startedAt: number;
   turnAdmissionLease?: AdmissionLease;
   onFirstOutput: () => void;
+  onInitialDispatch?: () => void;
   callbacks: ComboChildCallbacks;
 }): Promise<Response> {
   const { plan, logCtx, childLog, attempt, startedAt, callbacks } = input;
@@ -317,6 +320,7 @@ export async function dispatchNativeComboChild(input: {
     childLog,
     attemptHandle,
     sendBudget: plan.sendBudget,
+    onInitialDispatch: input.onInitialDispatch,
     ...(input.turnAdmissionLease ? { turnAdmissionLease: input.turnAdmissionLease } : {}),
     onFirstOutput: () => {
       outputSeen = true;
