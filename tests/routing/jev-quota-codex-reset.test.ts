@@ -9,12 +9,18 @@ import { commitPoolQuotaResponse } from "../../src/codex/auth-api/pool-quota-pro
 import { clearMainAccountInfoCache, observeMainQuotaIdentity, observeMainQuotaCredential, setMainAccountCredentialPresence } from "../../src/codex/main-account-cache";
 import { readLoadedDecisionQuotaPool } from "../../src/providers/quota-decision-snapshot";
 import { jevQuotaSignalFromWindows } from "../../src/combos/jev-quota";
+import { captureConfigGeneration, reconcileStateGeneration } from "../../src/lib/state-store-sweeper";
 import { createTempHome, type TempHome } from "../helpers/temp-home";
 
 const now = 2_000_000_000_000;
 let home: TempHome;
 let clock: ReturnType<typeof spyOn>;
 beforeEach(() => {
+  // An earlier file in the same bun process may have reconciled with an incomplete context: the owners that ran before the
+  // failing one keep the raised fence while the shared generation stays behind, so every default-generation writer here
+  // would be discarded as stale. A complete reconciliation realigns both without touching registrations.
+  reconcileStateGeneration({ generation: 0, providerNames: new Set(), comboIds: new Set(), comboTargets: new Set(),
+    codexAccountIds: new Set(), oauthAccountKeys: new Set(), configRoots: new Set() });
   home = createTempHome("ocx-jq-reset-");
   clock = spyOn(Date, "now").mockReturnValue(now);
   clearAccountQuota();
@@ -56,7 +62,7 @@ for (const reset of ["NaN", "Infinity", "-1", "invalid", ""]) {
   test(`pool WHAM retains invalid reset ${JSON.stringify(reset)} through its real commit boundary`, async () => {
     const pool = poolWriter();
     const result = await commitPoolQuotaResponse(Response.json({ rate_limit: { primary_window: { used_percent: 95, reset_at: reset, limit_window_seconds: 604800 } } }), {
-      accountId: "fixture", existing: null, configuredPlan: "plus", generation: pool.generation, writerGeneration: 0, poolWriter: pool.writer,
+      accountId: "fixture", existing: null, configuredPlan: "plus", generation: pool.generation, writerGeneration: captureConfigGeneration(), poolWriter: pool.writer,
     });
     expect(jevQuotaSignalFromWindows(windows("codex"), "gpt-6-astra", now).tier).toBe("unknown");
     expect(Number.isNaN(windows("codex")![0]!.resetAt)).toBe(true);
