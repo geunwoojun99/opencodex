@@ -1293,6 +1293,7 @@
     "oauth-refresh.test.ts": "oauth",
     "oauth-status-privacy.test.ts": "oauth",
     "oauth-store-multi.test.ts": "oauth",
+    "oauth-store-quota-isolation.test.ts": "oauth",
     "oauth-tos-warning.test.ts": "gui",
     "oauth-upsert-preserves-api-key.test.ts": "oauth",
     "ocx-launcher-runtime.test.ts": "cli",

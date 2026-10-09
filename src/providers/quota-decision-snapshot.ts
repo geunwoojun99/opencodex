@@ -90,6 +90,12 @@ export function publishDecisionQuotaRoster(provider: string, rows: readonly Deci
   }
   rosters.set(provider, { root: getConfigDir(), accounts: rows.map(row => ({ id: row.id, generation: row.generation, usable: row.usable })) });
 }
+/** Withdraw a pool provider's roster and evidence so readers see it as unknown rather than stale or empty. */
+export function withdrawDecisionQuotaRoster(provider: string): void {
+  clearDecisionAccountQuotas(provider);
+  rosters.delete(provider);
+  for (const key of unusable.keys()) if (key.startsWith(`${provider}\0`)) unusable.delete(key);
+}
 /** Publish windows for a roster account at the matching credential generation; a partial observation retains other windows of the same generation. */
 export function publishDecisionAccountQuota(provider: string, id: string, generation: string | number, windows: readonly DecisionQuotaWindow[], partial = false): void {
   const roster = rosters.get(provider);

@@ -359,15 +359,17 @@ function loadAuthStoreInternal(): { store: AuthStore; hadLegacy: boolean } {
   hardenConfigDir();
   hardenExistingSecret(path);
   if (!existsSync(path)) { publishAuthDecisionQuotaRoster({}); return { store: {}, hadLegacy: false }; }
+  let result: { store: AuthStore; hadLegacy: boolean };
   try {
-    const result = normalizeAuthStore(JSON.parse(readFileSync(path, "utf-8")));
-    publishAuthDecisionQuotaRoster(result.store);
-    return result;
+    result = normalizeAuthStore(JSON.parse(readFileSync(path, "utf-8")));
   } catch {
     backupInvalidConfig(path);
     publishAuthDecisionQuotaRoster({});
     return { store: {}, hadLegacy: false };
   }
+  // Outside the parse try: roster publication is advisory and must never route a loaded store into the invalid-config backup path.
+  publishAuthDecisionQuotaRoster(result.store);
+  return result;
 }
 
 export function loadAuthStore(): AuthStore {
