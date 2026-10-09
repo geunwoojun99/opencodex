@@ -18,7 +18,7 @@ import type { OcxConfig } from "../../types";
 import type { RouteResult } from "../../router";
 import type { DataPlaneAdmission } from "../auth-cors";
 import type { AdmissionLease } from "../../lib/admission";
-import type { RequestExecutionBudget } from "../../lib/request-execution-budget";
+import type { RequestExecutionBudget, SingleUseDispatchPermit } from "../../lib/request-execution-budget";
 import type { TransientSendBudget } from "../../lib/upstream-retry";
 import type { ResponsesTerminalStatus } from "../../bridge";
 import type { NativeChatFinishLog } from "../chat-native";
@@ -62,6 +62,7 @@ export interface NativeComboChildRun {
   childLog: RequestLogContext;
   attemptHandle: InferenceAttempt;
   sendBudget: RequestExecutionBudget;
+  comboDispatchPermit?: SingleUseDispatchPermit;
   turnAdmissionLease?: AdmissionLease;
   onFirstOutput: () => void;
   /** Reports to the combo's child callbacks; it never writes the parent's final row itself. */
@@ -289,6 +290,7 @@ export interface ComboChildCallbacks {
 export async function dispatchNativeComboChild(input: {
   source: ComboProtocolSource;
   plan: NativeComboChildPlan;
+  comboDispatchPermit?: SingleUseDispatchPermit;
   logCtx: RequestLogContext;
   childLog: RequestLogContext;
   attempt: PersistedUsageAttempt;
@@ -334,6 +336,7 @@ export async function dispatchNativeComboChild(input: {
     childLog,
     attemptHandle,
     sendBudget: plan.sendBudget,
+    comboDispatchPermit: input.comboDispatchPermit,
     ...(input.turnAdmissionLease ? { turnAdmissionLease: input.turnAdmissionLease } : {}),
     onFirstOutput: () => {
       outputSeen = true;
