@@ -349,6 +349,7 @@
   "codex-account-label.test.ts": "codex-integration", "codex-account-mode-state.test.ts": "gui",
   "codex-account-namespaces.test.ts": "codex-integration",
   "codex-account-selection-preferences.test.ts": "codex-integration",
+  "codex-account-store-quota-isolation.test.ts": "codex-integration",
   "codex-account-store-refresh-classification.test.ts": "codex-integration",
   "codex-account-store.test.ts": "codex-integration", "codex-account-threshold-api.test.ts": "codex-integration",
   "codex-account-threshold-auth.test.ts": "codex-integration",

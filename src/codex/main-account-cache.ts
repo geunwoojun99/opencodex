@@ -1,4 +1,4 @@
-import { publishDecisionQuotaRoster } from "../providers/quota-decision-snapshot";
+import { publishDecisionQuotaRoster, withdrawDecisionQuotaRoster } from "../providers/quota-decision-snapshot";
 import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import type { StoredAccountQuota } from "./quota-types";
 import { truncateRetainedUtf8 } from "../lib/admission";
@@ -150,6 +150,11 @@ export function clearMainAccountCredentialPresence(): void {
 
 /** Publish the single `__main__` roster row for advisory decision quota; it is usable only while a credential is observed and present. */
 function publishMainDecisionRoster(): void {
-  publishDecisionQuotaRoster("codex-main", [{ id: "__main__", generation: mainQuotaCredentialGeneration,
-    usable: mainDecisionCredentialUsable && cachedMainCredentialPresence !== false && mainQuotaCredential !== undefined }]);
+  try {
+    publishDecisionQuotaRoster("codex-main", [{ id: "__main__", generation: mainQuotaCredentialGeneration,
+      usable: mainDecisionCredentialUsable && cachedMainCredentialPresence !== false && mainQuotaCredential !== undefined }]);
+  } catch {
+    // Advisory evidence must never alter main-credential cache state transitions; on failure the main roster becomes unknown.
+    try { withdrawDecisionQuotaRoster("codex-main"); } catch { /* best-effort */ }
+  }
 }

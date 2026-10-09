@@ -120,20 +120,21 @@ function loadCodexAccountRecordStore(): CodexAccountStore {
   hardenConfigDir();
   hardenExistingSecret(path);
   if (!existsSync(path)) { publishCodexDecisionQuotaRoster({}); return {}; }
+  const normalized: CodexAccountStore = {};
   try {
     const raw = JSON.parse(readFileSync(path, "utf-8")) as RawCodexAccountStore;
-    const normalized: CodexAccountStore = {};
     for (const [id, value] of Object.entries(raw)) {
       const record = normalizeRecord(value);
       if (record) normalized[id] = record;
     }
-    publishCodexDecisionQuotaRoster(normalized);
-    return normalized;
   } catch {
     backupInvalidConfig(path);
     publishCodexDecisionQuotaRoster({});
     return {};
   }
+  // Outside the parse try: roster publication is advisory and must never route a loaded store into the invalid-config backup path.
+  publishCodexDecisionQuotaRoster(normalized);
+  return normalized;
 }
 
 /** Atomically write the Codex account store and republish the decision-quota roster so published evidence tracks the persisted credentials. */
