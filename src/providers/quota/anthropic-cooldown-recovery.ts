@@ -1,3 +1,5 @@
+import { providerDecisionWindows } from "../quota-decision-publication";
+import { publishDecisionAccountQuota } from "../quota-decision-snapshot";
 import { mergeAnthropicFamilyWindows, hasAnthropicFamilyEnumeration } from "./anthropic-family-headers";
 import { getCachedProviderAccountQuota, captureProviderAccountQuotaEpoch } from "./account-cache";
 import { anthropicModelQuotaFor } from "../../oauth/anthropic-model-quota";
@@ -10,6 +12,7 @@ export class AnthropicQuotaProbeOwnershipError extends Error {}
 
 export type AnthropicCooldownRecoveryProbe = Readonly<{
   instance: AnthropicInstanceId;
+  generation: string;
   requiresFreshDispatch: boolean;
   isCurrentCredential(): boolean;
   isCurrentFamily(): boolean;
@@ -20,6 +23,8 @@ export type AnthropicCooldownRecoveryProbe = Readonly<{
 export type AnthropicQuotaRecoveryResult = Readonly<{
   instance: AnthropicInstanceId;
   quota: ProviderQuota;
+  /** Publishes secret-free advisory evidence for the primary pool only; a no-op for Pool 2. */
+  publishDecisionQuota(): void;
   /** Must be checked synchronously at each publication boundary. */
   isCurrent(): boolean;
 }>;
@@ -129,6 +134,7 @@ function createAnthropicCooldownRecovery(instance: AnthropicInstanceId) {
     };
     return {
       instance,
+      generation,
       requiresFreshDispatch: claim !== null,
       isCurrentCredential,
       isCurrentFamily: () => familyGeneration(accountId) === capturedFamilyGeneration,
@@ -165,6 +171,7 @@ function createAnthropicCooldownRecovery(instance: AnthropicInstanceId) {
     }
     // Clearing the claimed cooldown intentionally advances the fence. Adopt that exact new
     // generation; any later observation/429 then invalidates publication before a cache write.
+    const rawQuota = quota;
     const ownsFamily = probe.isCurrentFamily();
     const authoritative = ownsFamily && hasAnthropicFamilyEnumeration(quota);
     if (ownsFamily) anthropicModelQuotaFor(instance).observeAnthropicFamilyQuota(accountId, quota.customWindows ?? [], quota.updatedAt, authoritative);
@@ -177,14 +184,19 @@ function createAnthropicCooldownRecovery(instance: AnthropicInstanceId) {
     }
     const publicationGeneration = anthropicCooldownGeneration(accountId);
     const publicationFamilyGeneration = familyGeneration(accountId);
+    const isCurrent = () => probe.isCurrentCredential()
+      && anthropicCooldownGeneration(accountId) === publicationGeneration
+      && familyGeneration(accountId) === publicationFamilyGeneration
+      && mayPublish();
     afterSettlementForTests?.();
     return {
       instance,
       quota,
-      isCurrent: () => probe.isCurrentCredential()
-        && anthropicCooldownGeneration(accountId) === publicationGeneration
-        && familyGeneration(accountId) === publicationFamilyGeneration
-        && mayPublish(),
+      isCurrent,
+      publishDecisionQuota: () => {
+        if (instance === "anthropic" && isCurrent()) publishDecisionAccountQuota("anthropic", accountId, probe.generation,
+          providerDecisionWindows(rawQuota).filter(row => ownsFamily || ["5h", "weekly", "monthly"].includes(row.window)), !authoritative);
+      },
     };
   }
 

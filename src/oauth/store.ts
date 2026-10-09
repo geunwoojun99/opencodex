@@ -19,6 +19,7 @@
  *   distinct one. Kimi extracts JWT `user_id`/`sub` as accountId; Cursor extracts JWT `sub` —
  *   both append distinct identified accounts under multiauth.
  */
+import { publishAuthDecisionQuotaRoster } from "./store-decision-quota";
 import { normalizeAnthropicIdentity, matchesAnthropicImport, mergeAnthropicIdentity } from "./anthropic-identity";
 import { isAnthropicInstanceId, type AnthropicInstanceId } from "../providers/anthropic-instance-id";
 import { assertNoCrossAnthropicRegistration, assertAnthropicCredentialSource, assertAnthropicInstanceLoginConfig } from "./store-anthropic-instance";
@@ -356,11 +357,14 @@ function loadAuthStoreInternal(): { store: AuthStore; hadLegacy: boolean } {
   const path = getAuthStorePath();
   hardenConfigDir();
   hardenExistingSecret(path);
-  if (!existsSync(path)) return { store: {}, hadLegacy: false };
+  if (!existsSync(path)) { publishAuthDecisionQuotaRoster({}); return { store: {}, hadLegacy: false }; }
   try {
-    return normalizeAuthStore(JSON.parse(readFileSync(path, "utf-8")));
+    const result = normalizeAuthStore(JSON.parse(readFileSync(path, "utf-8")));
+    publishAuthDecisionQuotaRoster(result.store);
+    return result;
   } catch {
     backupInvalidConfig(path);
+    publishAuthDecisionQuotaRoster({});
     return { store: {}, hadLegacy: false };
   }
 }
@@ -411,6 +415,7 @@ function persist(store: AuthStore): void {
   }
   hardenConfigDir();
   atomicWriteFile(getAuthStorePath(), JSON.stringify(store, null, 2) + "\n");
+  publishAuthDecisionQuotaRoster(store);
 }
 
 export class OAuthFileLockError extends Error { readonly code = "OAUTH_FILE_LOCK_UNAVAILABLE"; constructor(message: string, options?: { cause?: unknown }) { super(message, options); this.name = "OAuthFileLockError"; } }

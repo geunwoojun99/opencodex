@@ -1,3 +1,4 @@
+import { invalidateDecisionKeyQuotas } from "./quota-decision-snapshot";
 import { createHash } from "node:crypto";
 import type { OcxProviderConfig } from "../types";
 import type { ProviderQuota, ProviderQuotaReport } from "./quota";
@@ -39,6 +40,7 @@ export function providerQuotaRoutingBinding(
 }
 
 export function clearCachedProviderQuotas(): void {
+  invalidateDecisionKeyQuotas();
   quotaCache.clear();
 }
 

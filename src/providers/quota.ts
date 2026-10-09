@@ -30,7 +30,7 @@ import {
   isProviderQuotaReportCurrent,
   LAST_GOOD_MAX_AGE_MS,
   providerQuotaBeforePublishForTests,
-  routingEvidence,
+  routingEvidence, publishCollectedDecisionQuota,
   setProviderQuotaReportCache,
   TERMINAL_QUOTA_FAILURE,
   type CodexAuthAccountsSnapshotPromise,
@@ -326,7 +326,7 @@ export async function fetchProviderQuotaReports(config: OcxConfig, forceRefresh 
     ) {
       const reports = response.reports.filter(item => mayCommitProviderQuotaKey(item.provider, writerGeneration));
       setProviderQuotaReportCache({ key, ts: Date.now(), response: { ...response, reports } });
-      replaceCachedProviderQuotas(reports, routingEvidence);
+      replaceCachedProviderQuotas(reports, routingEvidence); publishCollectedDecisionQuota(reports, config);
       notifyProviderQuotaSnapshot(reports, config);
     }
     return response;

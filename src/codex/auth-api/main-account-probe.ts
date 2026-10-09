@@ -6,7 +6,7 @@ import { isCanonicalOpenAiForwardProvider, OPENAI_CODEX_PROVIDER_ID } from "../.
 import { providerCodexAccountMode } from "../../providers/registry";
 import { isSelectableCodexPoolAccount } from "../account-id";
 import type { OcxConfig } from "../../types";
-import { parseMainPolicyUsageQuota, parseUsageQuota, setAccountQuotaFromParsed } from "../quota";
+import { isValidWhamHistoryObservation, parseMainPolicyUsageQuota, parseUsageQuota, setAccountQuotaFromParsed } from "../quota";
 import type { StoredAccountQuota, WhamUsageResponse } from "../quota";
 import { reconcileMainCodexAccountRuntimeState } from "../account-lifecycle";
 import { getMainChatgptAccountId, readCodexTokensResult } from "../auth-collision";
@@ -398,7 +398,7 @@ export async function fetchMainAccountInfoWhileOwned(
       // score and auto-switch the main account exactly like a pool account (Option A).
       setMainAccountPlan(result.plan);
       if (result.quota) {
-        setAccountQuotaFromParsed(MAIN_CODEX_ACCOUNT_ID, result.quota, writerGeneration, mainQuotaWriter, policyQuota);
+        setAccountQuotaFromParsed(MAIN_CODEX_ACCOUNT_ID, result.quota, writerGeneration, mainQuotaWriter, policyQuota, undefined, false, false, isValidWhamHistoryObservation(usage) ? quota : null);
       }
       publishQuotaDispatch(dispatchSequence);
       readState.usable = quota !== null;

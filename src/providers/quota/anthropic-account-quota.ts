@@ -70,7 +70,7 @@ export async function fetchAnthropicAccountQuota(
       ts: Date.now(), quota: normalizeAnthropicQuota(result?.quota ?? retained?.quota, Date.now()),
       ...(!result ? { unavailable: true as const } : {}), isCurrent,
     };
-    if (isCurrent() && mayCommitAccountQuotaKey(key, writerGeneration)) { accountQuotaCache.set(key, entry); sweepExpiredOnWrite(entry.ts); }
+    if (isCurrent() && mayCommitAccountQuotaKey(key, writerGeneration)) { accountQuotaCache.set(key, entry); result?.publishDecisionQuota(); sweepExpiredOnWrite(entry.ts); }
     return entry;
   };
   const probe = (async (): Promise<AccountQuotaCacheEntry> => {

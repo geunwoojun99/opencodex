@@ -176,6 +176,8 @@ export async function handleComboRoutes(ctx: ManagementContext): Promise<Respons
     const requestedCombo: Record<string, unknown> = body.combo;
     const effectiveCombo = {
       ...requestedCombo,
+      ...(!Object.hasOwn(requestedCombo, "decisionQuotaSignals") && requestedCombo.strategy === "jev" && previous?.decisionQuotaSignals !== undefined ? { decisionQuotaSignals: previous.decisionQuotaSignals } : {}),
+      ...(!Object.hasOwn(requestedCombo, "decisionQuotaTiers") && requestedCombo.strategy === "jev" && previous?.decisionQuotaTiers !== undefined ? { decisionQuotaTiers: previous.decisionQuotaTiers } : {}),
       ...(!Object.hasOwn(requestedCombo, "cooldownMs") && previous?.cooldownMs !== undefined
         ? { cooldownMs: previous.cooldownMs }
         : {}),

@@ -1,3 +1,4 @@
+import { publishDecisionQuotaRoster } from "../providers/quota-decision-snapshot";
 import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import type { StoredAccountQuota } from "./quota-types";
 import { truncateRetainedUtf8 } from "../lib/admission";
@@ -21,11 +22,22 @@ let observedMainQuotaIdentityKey: string | undefined;
 const mainQuotaCredentialKey = randomBytes(32);
 let mainQuotaCredential: { bearerHmac: Buffer; writer: MainQuotaWriter } | undefined;
 let mainQuotaCredentialGeneration = 0;
+let mainDecisionCredentialUsable = true;
+/** Existing physical credential owner supplies terminal grant/usability observations. */
+export function observeMainDecisionCredentialUsable(usable: boolean): void {
+  mainDecisionCredentialUsable = usable;
+  publishMainDecisionRoster();
+}
 
 /** Process-local transition fence; no credential material or persisted identity. */
 export function getMainQuotaCredentialGeneration(): number { return mainQuotaCredentialGeneration; }
 
 export type MainQuotaWriter = Readonly<{ identityKey: string; identityGeneration: number }>;
+const decisionWriterGenerations = new WeakMap<MainQuotaWriter, number>();
+export function mainDecisionQuotaWriterGeneration(writer: MainQuotaWriter): number | undefined {
+  const generation = decisionWriterGenerations.get(writer);
+  return generation === mainQuotaCredentialGeneration && isMainQuotaWriterLive(writer) ? generation : undefined;
+}
 
 function mainQuotaIdentityKey(accountId: string): string {
   return createHash("sha256").update("opencodex-main-quota-v1\0").update(accountId).digest("hex");
@@ -37,16 +49,20 @@ export function observeMainQuotaIdentity(accountId: string): void {
   const identityKey = mainQuotaIdentityKey(accountId);
   if (identityKey === observedMainQuotaIdentityKey) return;
   observedMainQuotaIdentityKey = identityKey;
+  mainDecisionCredentialUsable = true;
   mainAccountIdentityGeneration += 1;
   mainQuotaCredential = undefined;
   mainQuotaCredentialGeneration += 1;
+  publishMainDecisionRoster();
 }
 
 export function captureMainQuotaWriter(accountId: string): MainQuotaWriter | undefined {
   if (!accountId) return undefined;
   const identityKey = mainQuotaIdentityKey(accountId);
   if (identityKey !== observedMainQuotaIdentityKey) return undefined;
-  return { identityKey, identityGeneration: mainAccountIdentityGeneration };
+  const writer = { identityKey, identityGeneration: mainAccountIdentityGeneration };
+  if (mainQuotaCredential) decisionWriterGenerations.set(writer, mainQuotaCredentialGeneration);
+  return writer;
 }
 
 /** Credential material must come from an already-owned read, never an incoming request. */
@@ -57,7 +73,10 @@ export function observeMainQuotaCredential(accessToken: string, accountId: strin
   if (!mainQuotaCredential || !isMainQuotaWriterLive(mainQuotaCredential.writer)
     || !timingSafeEqual(bearerHmac, mainQuotaCredential.bearerHmac)) mainQuotaCredentialGeneration += 1;
   mainQuotaCredential = { bearerHmac, writer };
-  return { ...writer };
+  publishMainDecisionRoster();
+  const result = { ...writer };
+  decisionWriterGenerations.set(result, mainQuotaCredentialGeneration);
+  return result;
 }
 
 export function matchesMainQuotaCredential(accessToken: string, effectiveAccountId: string | undefined): boolean {
@@ -102,6 +121,7 @@ export function clearMainAccountInfoCache(): void {
   mainAccountIdentityGeneration += 1;
   mainQuotaCredential = undefined;
   mainQuotaCredentialGeneration += 1;
+  publishMainDecisionRoster();
 }
 
 /** Last physical credential presence observed while native-main ownership was held. */
@@ -110,9 +130,20 @@ export function getMainAccountCredentialPresence(): boolean | null {
 }
 
 export function setMainAccountCredentialPresence(present: boolean): void {
+  if (!present && cachedMainCredentialPresence !== false) {
+    mainQuotaCredential = undefined; mainQuotaCredentialGeneration += 1;
+  }
   cachedMainCredentialPresence = present;
+  publishMainDecisionRoster();
 }
 
 export function clearMainAccountCredentialPresence(): void {
   cachedMainCredentialPresence = null;
+  mainQuotaCredential = undefined; mainQuotaCredentialGeneration += 1;
+  publishMainDecisionRoster();
+}
+
+function publishMainDecisionRoster(): void {
+  publishDecisionQuotaRoster("codex-main", [{ id: "__main__", generation: mainQuotaCredentialGeneration,
+    usable: mainDecisionCredentialUsable && cachedMainCredentialPresence !== false && mainQuotaCredential !== undefined }]);
 }

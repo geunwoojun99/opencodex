@@ -598,7 +598,7 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
                   && credentialGeneration(current.credential) === snapshot.generation
                   && current.credential.accountId === providerAccountUuid) {
                   bindAnthropicRefusalCredentialForSend(dispatched, sendOwner, providerAccountUuid);
-                  recordAnthropicAccountQuotaFromHeadersForInstance(nativeInstance!, snapshot.accountId, dispatched.headers, writerGeneration, dispatched.status, route.modelId);
+                  recordAnthropicAccountQuotaFromHeadersForInstance(nativeInstance!, snapshot.accountId, dispatched.headers, writerGeneration, dispatched.status, route.modelId, snapshot.generation);
                 }
               } catch { /* Passive observation must not fail the response. */ }
             }

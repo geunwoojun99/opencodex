@@ -14,6 +14,7 @@ import {
   hardenExistingSecret,
   withConfigMutationLockSync,
 } from "../config";
+import { publishCodexDecisionQuotaRoster } from "./store-decision-quota";
 import { assertNotRealHomeUnderTest } from "../lib/test-home-guard";
 import type { CodexAccountCredentialRecord, CodexAccountCredentials } from "../types";
 import { advanceCodexCredentialMutationEpoch } from "./credential-mutation-epoch";
@@ -117,7 +118,7 @@ function loadCodexAccountRecordStore(): CodexAccountStore {
   const path = codexAccountsPath();
   hardenConfigDir();
   hardenExistingSecret(path);
-  if (!existsSync(path)) return {};
+  if (!existsSync(path)) { publishCodexDecisionQuotaRoster({}); return {}; }
   try {
     const raw = JSON.parse(readFileSync(path, "utf-8")) as RawCodexAccountStore;
     const normalized: CodexAccountStore = {};
@@ -125,9 +126,11 @@ function loadCodexAccountRecordStore(): CodexAccountStore {
       const record = normalizeRecord(value);
       if (record) normalized[id] = record;
     }
+    publishCodexDecisionQuotaRoster(normalized);
     return normalized;
   } catch {
     backupInvalidConfig(path);
+    publishCodexDecisionQuotaRoster({});
     return {};
   }
 }
@@ -137,6 +140,7 @@ function persist(store: CodexAccountStore): void {
   assertNotRealHomeUnderTest(dir);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
   atomicWriteFile(codexAccountsPath(), JSON.stringify(store, null, 2) + "\n");
+  publishCodexDecisionQuotaRoster(store);
 }
 
 function persistCredentialMutation(store: CodexAccountStore): void {

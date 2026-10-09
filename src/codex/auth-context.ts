@@ -66,7 +66,7 @@ import { ACCOUNT_GATED_NATIVE_OPENAI_MODELS, NATIVE_RESERVE_MODEL } from "./cata
 import type { CodexCooldownSource, CodexQuotaScope } from "./routing";
 import { maskAccountId } from "../lib/privacy";
 import { formatErrorResponse } from "../bridge";
-import { CODEX_UNKNOWN_USAGE_SCORE, getAccountQuota, getMainPolicyQuota, parseUsageQuota, parseMainPolicyUsageQuota, setAccountQuotaFromParsed } from "./quota";
+import { CODEX_UNKNOWN_USAGE_SCORE, getAccountQuota, getMainPolicyQuota, isValidWhamHistoryObservation, parseUsageQuota, parseMainPolicyUsageQuota, setAccountQuotaFromParsed } from "./quota";
 import { codexAccountUsesCreditsAfterLimit, codexUsageLimitResetAt } from "./account-credit-use";
 import type { CodexAccountMode, OcxConfig, OcxProviderConfig } from "../types";
 import { FORWARD_HEADERS } from "../adapters/openai-responses";
@@ -666,7 +666,7 @@ async function authorizeReserveCredential(
       token, writer, signal,
       observeOrdinaryQuota(data, capturedWriter) {
         setAccountQuotaFromParsed(MAIN_CODEX_ACCOUNT_ID, parseUsageQuota(data), writerGeneration,
-          capturedWriter, parseMainPolicyUsageQuota(data));
+          capturedWriter, parseMainPolicyUsageQuota(data), undefined, false, false, isValidWhamHistoryObservation(data) ? parseUsageQuota(data) : null);
       },
     });
   // The capability read also publishes ordinary quota. A new 99% reading or cooldown wins.
