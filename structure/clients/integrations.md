@@ -477,7 +477,7 @@ connection defaults all profiles on; explicit per-profile changes materialize th
 pin one legacy root owner before changing it. Sibling stores remain independent. Policy saves
 precede coordinated writes under one scoped flight, and actual file state/refusals remain
 separate. Restore reconciles target intent from validated snapshot ownership without changing
-sibling policy. Profile journal views retain source-store provenance for older legacy entries.
+sibling policy. Profile journal views retain source-store provenance for older legacy entries. A profile that is off beside a stale block is never re-enabled automatically; the CLI names its preview-then-enable recovery (`src/cli/aside-profile-recovery.ts`), and a malformed policy that falls back to all-off produces a load-time warning.
 
 The shared atomic replacement publisher also identifies explicit Remote Workspace file writes as `remote-workspace`; its isolated owner and support limits are documented in [Remote Workspace](../remote-workspace.md).
 
@@ -500,7 +500,7 @@ reports LazyCodex installed, `src/clients/omo-role-models.ts`
 mirrors a dashboard or `ocx agent roles set` pick into `[codex].agents.<role>.model` of
 `~/.omo/omo.jsonc`, which LazyCodex 5.1.1 and later reads. The home is resolved the way omo
 resolves it: `HOME`, then `USERPROFILE`, then the OS home. This write has no ownership record,
-snapshot, or journal. It changes one value the user just chose and leaves every other key as it
+snapshot, or journal. It changes the role's `model` and, when the request carries an effort, its `reasoning` (Codex `none` becomes `off`; a level LazyCodex lacks, such as `ultra`, removes a stale `reasoning`; a model-only save keeps it), and leaves every other key as it
 was, re-serialized with the file's indentation, line endings, and BOM.
 
 It never creates the file and never writes one it would damage: a missing file reports
