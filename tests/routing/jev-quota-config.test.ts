@@ -22,6 +22,7 @@ beforeEach(() => {
   saveConfig(config);
 });
 afterEach(() => { log.mockRestore(); error.mockRestore(); home.remove(); });
+/** Call the real combo management route handler and parse its response. */
 async function api(method: string, body?: unknown): Promise<Response> {
   const req = new Request("http://127.0.0.1/api/combos", { method, ...(body ? { headers: { "content-type": "application/json" }, body: JSON.stringify(body) } : {}) });
   const response = await handleComboRoutes({ req, url: new URL(req.url), config, deps: {}, version: "fixture", trustedLoopbackIngress: true, guiSessionIssuance: null,
@@ -33,6 +34,7 @@ const deps: RuntimeApiDeps = {
   findLiveProxy: async () => ({ pid: null, port: 14000, source: "runtime" }),
   fetchImpl: (async (_input, init) => api(init?.method ?? "GET", init?.body ? JSON.parse(String(init.body)) : undefined)) as typeof fetch,
 };
+/** PUT a combo definition, optionally renaming from an existing id. */
 const put = (combo: unknown, id = "saved", renameFrom?: string) => api("PUT", { id, combo, ...(renameFrom ? { renameFrom } : {}) });
 
 describe("quota config load and validation", () => {

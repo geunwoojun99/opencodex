@@ -485,6 +485,7 @@ function modelProfile(candidate: JevCandidate): string {
     ?? "Configured target with capability unspecified by JEV; judge it only from the supplied request evidence.";
 }
 
+/** Describe one allowlisted target and effort option for a decision backend, including the optional advisory quota clause. */
 function criterionDescription(criterion: JevRouteOption["criterion"], quota?: JevQuotaSignal): string {
   const effort = criterion.reasoning_effort
     ? `${criterion.reasoning_effort} reasoning effort`

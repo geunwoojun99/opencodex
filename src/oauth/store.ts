@@ -353,6 +353,7 @@ export function credentialGeneration(cred: OAuthCredentials): string {
   return createHash("sha256").update(JSON.stringify([cred.refresh, cred.access, cred.expires])).digest("hex");
 }
 
+/** Load and normalize the OAuth auth store with hardened permissions, and republish the Anthropic decision-quota roster derived from it. */
 function loadAuthStoreInternal(): { store: AuthStore; hadLegacy: boolean } {
   const path = getAuthStorePath();
   hardenConfigDir();
@@ -405,6 +406,7 @@ export function peekAuthStore(): AuthStore {
   return snapshot.kind === "ready" ? snapshot.store : {};
 }
 
+/** Atomically write the auth store with owner-only permissions and republish the Anthropic decision-quota roster. */
 function persist(store: AuthStore): void {
   const dir = getConfigDir();
   assertNotRealHomeUnderTest(dir);

@@ -40,6 +40,7 @@ export function clearMainRefreshGrantRejection(key: string): void {
 }
 
 
+/** Quarantine a Codex account (or one credential generation) after an auth failure, and mark its advisory decision-quota row unusable so routing evidence cannot treat it as healthy. */
 export function markAccountNeedsReauth(
   id: string,
   writerGeneration = captureConfigGeneration(),
@@ -83,6 +84,7 @@ export function isAccountNeedsReauth(id: string): boolean {
   return true;
 }
 
+/** Lift a reauth quarantine only when the proof matches the quarantined credential generation, and restore the advisory decision-quota row's usability. */
 export function clearAccountNeedsReauth(id: string, credentialGeneration?: number): void {
   // A model response proves only the credential it used. Keep account-wide
   // quarantine and evidence from another generation intact.

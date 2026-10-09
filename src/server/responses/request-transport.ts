@@ -552,6 +552,7 @@ export async function prepareResponsesTransport(
     throw new Error("Account selection changed repeatedly before turn dispatch");
     } finally { producer?.close(); }
   };
+  /** Build the dispatch override that re-validates the OAuth selection and bearer ownership at the physical send boundary; undefined for forwarded credentials. */
   const oauthDispatch = (wireRequest: AdapterRequest, requestParsed = parsed): ProviderFetchOptions["dispatchOverride"] => {
     if (route.provider.authMode === "forward") return undefined;
     return async (input, init, execute) => {

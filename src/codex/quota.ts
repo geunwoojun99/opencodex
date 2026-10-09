@@ -304,7 +304,8 @@ export function setAccountQuotaFromParsed(
   // of reading as a writer-free legacy/login observation.
   poolRequest = false,
   decisionObservationPartial = true,
-  decisionRaw: Omit<StoredAccountQuota, "updatedAt"> | null = policyQuota,
+  // Advisory publication is explicit opt-in evidence: display or policy data never becomes it by default.
+  decisionRaw: Omit<StoredAccountQuota, "updatedAt"> | null = null,
 ): void {
   quota = withoutRetiredCodexQuota(quota);
   policyQuota = withoutRetiredCodexQuota(policyQuota);
@@ -549,6 +550,7 @@ export function withoutRetiredCodexQuota<T extends Omit<StoredAccountQuota, "upd
   return snapshotHasUsage(next) || snapshotHasCredits(next) ? next as T : null;
 }
 
+/** Parse `x-codex-*` rate-limit headers into a quota observation, binding the raw reset values so decision evidence can keep invalid resets distinct from the display fields. */
 export function parseUpstreamQuotaHeaders(headers: Headers, options?: { modelId?: string }): Omit<StoredAccountQuota, "updatedAt"> | null {
   if (isRetiredCodexSparkModel(options?.modelId)) return null;
   const primaryRaw = headers.get("x-codex-primary-used-percent");
@@ -623,6 +625,7 @@ export function parseUpstreamQuotaHeaders(headers: Headers, options?: { modelId?
   return hasKnownQuotaValue(quota) ? quota : null;
 }
 
+/** Apply upstream rate-limit headers for an account: publish display and policy quota and, only for a valid observation, the advisory decision evidence. */
 export function applyAccountQuotaFromUpstreamHeaders(
   accountId: string,
   headers: Headers,
@@ -832,6 +835,7 @@ function forgetCodexQuotaBaseline(accountId?: string): void {
     });
 }
 
+/** Clear stored quota, advisory decision evidence and history for one account, or for all accounts when no id is given. */
 export function clearAccountQuota(accountId?: string): void {
   clearDecisionAccountQuotas("codex", accountId);
   if (!accountId || accountId === MAIN_CODEX_ACCOUNT_ID) clearDecisionAccountQuotas("codex-main");

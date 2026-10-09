@@ -13,7 +13,9 @@ let f: AnthropicInstanceFixture;
 beforeEach(async () => { f = await createAnthropicInstanceFixture(); await f.seed(); });
 afterEach(async () => { await f.dispose(); });
 
+/** Read the loaded primary-pool decision windows for an account id. */
 const windowsOf = (id: string) => readLoadedDecisionQuotaPool("anthropic")?.find(row => row.id === id)?.windows;
+/** Credential generation of an account in the given Anthropic instance. */
 const generationOf = (instance: AnthropicInstanceId, id: string) =>
   f.store.credentialGeneration(f.store.getAccountCredential(instance, id)!);
 /** Force the strongest collision: same id AND same credential generation in both pools. */
@@ -24,6 +26,7 @@ async function collidePool2Credential(id: string): Promise<void> {
   });
   expect(generationOf("anthropic2", id)).toBe(generationOf("anthropic", id));
 }
+/** Publish a quota probe result for an account through the instance's real cooldown-recovery path. */
 async function publishProbe(instance: AnthropicInstanceId, id: string, weeklyPercent: number): Promise<void> {
   const token = f.store.getAccountCredential(instance, id)!.access;
   const result = await anthropicCooldownRecoveryFor(instance).probeAnthropicQuotaWithRecovery(

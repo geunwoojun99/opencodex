@@ -39,6 +39,7 @@ export function providerQuotaRoutingBinding(
   ])).digest("hex");
 }
 
+/** Clear the routing quota cache together with key-based decision evidence, so one cannot outlive the other. */
 export function clearCachedProviderQuotas(): void {
   invalidateDecisionKeyQuotas();
   quotaCache.clear();

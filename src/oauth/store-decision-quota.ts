@@ -2,6 +2,7 @@
 import { createHash } from "node:crypto";
 import { publishDecisionQuotaRoster } from "../providers/quota-decision-snapshot";
 import type { AuthStore } from "./store";
+/** Publish the secret-free Anthropic pool roster; the generation is a one-way digest of the credential, never the credential itself. */
 export function publishAuthDecisionQuotaRoster(store: AuthStore): void {
   publishDecisionQuotaRoster("anthropic", (store.anthropic?.accounts ?? []).map(row => ({
     id: row.id,

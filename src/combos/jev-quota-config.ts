@@ -12,6 +12,7 @@ export interface ResolvedJevQuotaTiers {
 export const JEV_QUOTA_TIERS = ["unknown", "healthy", "moderate", "limited", "nearly_exhausted"] as const;
 export type JevQuotaTier = typeof JEV_QUOTA_TIERS[number];
 export const JEV_QUOTA_DEFAULT_TIERS: ResolvedJevQuotaTiers = { limited: 70, nearlyExhausted: 90 };
+/** Validate quota tier overrides and merge them with the defaults; return undefined for unknown keys, non-finite or out-of-range values, or thresholds that are not strictly ascending. */
 export function normalizeJevQuotaTiers(value: unknown): ResolvedJevQuotaTiers | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
   const raw = value as Record<string, unknown>;
@@ -24,6 +25,7 @@ export function normalizeJevQuotaTiers(value: unknown): ResolvedJevQuotaTiers | 
   if (values.some((value, i) => i > 0 && value! <= values[i - 1]!)) return undefined;
   return result as ResolvedJevQuotaTiers;
 }
+/** Map a used percentage to a quota tier using the thresholds; a non-finite or out-of-range percentage is unknown. */
 export function jevQuotaTier(percent: number, tiers: ResolvedJevQuotaTiers = JEV_QUOTA_DEFAULT_TIERS): JevQuotaTier {
   if (!Number.isFinite(percent) || percent < 0 || percent > 100) return "unknown";
   if (percent >= tiers.nearlyExhausted) return "nearly_exhausted";
@@ -31,6 +33,7 @@ export function jevQuotaTier(percent: number, tiers: ResolvedJevQuotaTiers = JEV
   if (tiers.moderate !== undefined && percent >= tiers.moderate) return "moderate";
   return "healthy";
 }
+/** Rank a quota tier for ordering; unknown ties healthy so missing evidence is never treated as exhausted. */
 export function jevQuotaRank(tier: JevQuotaTier): number {
   return tier === "unknown" || tier === "healthy" ? 0 : tier === "moderate" ? 1 : tier === "limited" ? 2 : 3;
 }
@@ -42,6 +45,7 @@ export interface JevQuotaDecisionSummary {
   nearly_exhausted: number;
   selected?: JevQuotaTier;
 }
+/** Validate a persisted decision quota summary (bounded per-tier counts and an optional selected tier), returning undefined when it is malformed. */
 export function normalizeJevQuotaSummary(value: unknown): JevQuotaDecisionSummary | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
   const raw = value as Record<string, unknown>;

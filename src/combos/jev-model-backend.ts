@@ -75,12 +75,14 @@ export function parseJevModelChoice(text: string, allowed: ReadonlySet<string>):
   return choice;
 }
 
+/** Resolve a JEV decision through the decision model, falling back with a gate reason on any failure; quota tiers are advisory input only and never widen the allowlist. */
 export async function resolveJevModelDecision(
   options: ResolveJevDecisionOptions & { decisionModel: string; invokeModel: JevModelInvoke },
 ): Promise<JevDecision> {
   const now = options.now ?? Date.now;
   const startedAt = now();
   let candidates = options.candidates;
+  /** Build the fallback decision for a failure gate, attaching the quota summary for the candidates in scope. */
   const failed = (gate: Exclude<JevDecision["gate"], "apply">): JevDecision =>
     withJevQuotaSummary(fallbackDecision(options.fallback, gate, Math.max(0, now() - startedAt), "model"), candidates);
 

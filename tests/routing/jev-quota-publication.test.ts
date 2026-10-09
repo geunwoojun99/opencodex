@@ -22,6 +22,7 @@ let clock: ReturnType<typeof spyOn>;
 beforeEach(() => { home = createTempHome("ocx-jq-pub-"); clock = spyOn(Date, "now").mockReturnValue(now); clearMainAccountInfoCache(); invalidateDecisionKeyQuotas(); publishDecisionQuotaRoster("anthropic", []); publishDecisionQuotaRoster("codex", []); });
 afterEach(() => { setAnthropicQuotaAfterSettlementForTests(undefined); clock.mockRestore(); invalidateDecisionKeyQuotas(); home.remove(); });
 const credential = { access: "fixture-access", refresh: "fixture-refresh", expires: now + 3_600_000 };
+/** Save a fixture Anthropic credential and return its account id. */
 async function anthropicAccount(): Promise<string> {
   await saveCredential("anthropic", credential);
   return getAccountSet("anthropic")!.accounts[0]!.id;
@@ -146,6 +147,7 @@ test("sole-key credits, USD and unscoped custom meters never become advisory win
 test("Ollama Cloud balance windows are advisory; the included-credit meter is not", () => {
   const provider = { adapter: "openai-chat" as const, baseUrl: "https://fixture.invalid/v1", apiKey: "fixture-ollama-key" };
   const config: OcxConfig = { port: 0, defaultProvider: "fixture", providers: { fixture: provider } };
+  /** Publish a collected Ollama Cloud balance body through the real collector path. */
   const publish = (body: Record<string, unknown>) => {
     const quota = parseOllamaCloudBalance(body)!;
     publishCollectedDecisionQuota([keyReport("fixture", "fixture", quota, provider, "fixture-ollama-key", quota)!], config);

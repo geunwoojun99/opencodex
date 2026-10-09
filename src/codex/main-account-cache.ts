@@ -34,6 +34,7 @@ export function getMainQuotaCredentialGeneration(): number { return mainQuotaCre
 
 export type MainQuotaWriter = Readonly<{ identityKey: string; identityGeneration: number }>;
 const decisionWriterGenerations = new WeakMap<MainQuotaWriter, number>();
+/** Return the credential generation a main quota writer was captured under, or undefined once that writer is stale or its credential generation has moved. */
 export function mainDecisionQuotaWriterGeneration(writer: MainQuotaWriter): number | undefined {
   const generation = decisionWriterGenerations.get(writer);
   return generation === mainQuotaCredentialGeneration && isMainQuotaWriterLive(writer) ? generation : undefined;
@@ -56,6 +57,7 @@ export function observeMainQuotaIdentity(accountId: string): void {
   publishMainDecisionRoster();
 }
 
+/** Capture a main quota writer for an account id only when it matches the observed physical identity, remembering the credential generation it was captured under. */
 export function captureMainQuotaWriter(accountId: string): MainQuotaWriter | undefined {
   if (!accountId) return undefined;
   const identityKey = mainQuotaIdentityKey(accountId);
@@ -116,6 +118,7 @@ export function setMainAccountInfoCache(value: CachedMainAccountInfo): void {
   };
 }
 
+/** Drop the cached main-account info and invalidate the observed identity and credential generation, then republish the main decision roster as unusable. */
 export function clearMainAccountInfoCache(): void {
   cachedMainAccountInfo = null;
   mainAccountIdentityGeneration += 1;
@@ -129,6 +132,7 @@ export function getMainAccountCredentialPresence(): boolean | null {
   return cachedMainCredentialPresence;
 }
 
+/** Record whether the main credential is physically present; a transition to absent invalidates the observed credential generation. Republishes the main decision roster. */
 export function setMainAccountCredentialPresence(present: boolean): void {
   if (!present && cachedMainCredentialPresence !== false) {
     mainQuotaCredential = undefined; mainQuotaCredentialGeneration += 1;
@@ -137,12 +141,14 @@ export function setMainAccountCredentialPresence(present: boolean): void {
   publishMainDecisionRoster();
 }
 
+/** Forget the last observed main credential presence and invalidate the observed credential generation, then republish the main decision roster. */
 export function clearMainAccountCredentialPresence(): void {
   cachedMainCredentialPresence = null;
   mainQuotaCredential = undefined; mainQuotaCredentialGeneration += 1;
   publishMainDecisionRoster();
 }
 
+/** Publish the single `__main__` roster row for advisory decision quota; it is usable only while a credential is observed and present. */
 function publishMainDecisionRoster(): void {
   publishDecisionQuotaRoster("codex-main", [{ id: "__main__", generation: mainQuotaCredentialGeneration,
     usable: mainDecisionCredentialUsable && cachedMainCredentialPresence !== false && mainQuotaCredential !== undefined }]);

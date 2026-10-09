@@ -15,7 +15,9 @@ export interface JevQuotaSignal {
   window?: DecisionQuotaWindow["window"];
   resetsInSeconds?: number;
 }
+/** Build the signal used when evidence is missing, stale or invalid; it ties healthy. */
 const unknown = (): JevQuotaSignal => ({ tier: "unknown" });
+/** Reduce decision quota windows to the worst applicable window for a model, ignoring cold, stale, future, invalid or reset-expired rows. */
 export function jevQuotaSignalFromWindows(windows: readonly DecisionQuotaWindow[] | undefined, model: string, now: number, tiers = JEV_QUOTA_DEFAULT_TIERS): JevQuotaSignal {
   let worst: DecisionQuotaWindow | undefined;
   for (const row of windows ?? []) {
@@ -33,6 +35,7 @@ export function jevQuotaSignalFromWindows(windows: readonly DecisionQuotaWindow[
 export function jevQuotaPoolSignal(signals: readonly JevQuotaSignal[]): JevQuotaSignal {
   return signals.reduce<JevQuotaSignal | undefined>((best, signal) => !best || jevQuotaRank(signal.tier) < jevQuotaRank(best.tier) ? signal : best, undefined) ?? unknown();
 }
+/** Read only already-loaded evidence for a target provider and model and return its quota signal; never resolves credentials or probes upstream. */
 export function jevQuotaSignalForTarget(config: OcxConfig, provider: string, model: string, now = Date.now(), tiers: ResolvedJevQuotaTiers = JEV_QUOTA_DEFAULT_TIERS): JevQuotaSignal {
   const row = config.providers[provider];
   if (!row || row.disabled) return unknown();
@@ -61,14 +64,17 @@ export function jevQuotaSignalForTarget(config: OcxConfig, provider: string, mod
   }
   return jevQuotaSignalFromWindows(readLoadedDecisionKeyQuota(provider, row), model, now, tiers);
 }
+/** Render the short natural-language quota clause appended to an option description. */
 export function jevQuotaClause(signal: JevQuotaSignal): string {
   return ` Quota ${signal.tier}${signal.usedPercent !== undefined ? ` (${signal.usedPercent}% of ${signal.window} used)` : ""}.`;
 }
+/** Project a quota signal onto the outbound criterion object: tier, used percentage, window and reset delay only. */
 export function jevQuotaCriterion(signal: JevQuotaSignal): Record<string, unknown> {
   return { tier: signal.tier, ...(signal.usedPercent !== undefined ? { used_percent: signal.usedPercent, window: signal.window } : {}),
     ...(signal.resetsInSeconds !== undefined ? { resets_in_seconds: signal.resetsInSeconds } : {}) };
 }
 export const JEV_QUOTA_INSTRUCTION = "Remaining subscription quota is advisory: among adequate options prefer healthier quota; unknown is not exhausted. Never change the target or effort allowlist.";
+/** Count candidate quota tiers and record the selected candidate's tier; undefined when no candidate carried quota evidence. */
 export function jevQuotaDecisionSummary(candidates: readonly { key: string; quota?: JevQuotaSignal }[], selectedKey: string): JevQuotaDecisionSummary | undefined {
   if (!candidates.some(candidate => candidate.quota)) return undefined;
   const summary: JevQuotaDecisionSummary = { unknown: 0, healthy: 0, moderate: 0, limited: 0, nearly_exhausted: 0 };

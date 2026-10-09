@@ -82,6 +82,7 @@ async function show(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   printData(combo, wantsJson);
 }
 
+/** Handle `ocx combo set`: parse the combo id and flags (including `--decision-quota-signals` and `--decision-quota-tiers`), then create or update the combo through the management API. */
 async function set(argv: string[], deps: RuntimeApiDeps): Promise<number> {
   const args = [...argv];
   const id = args.shift()?.trim();

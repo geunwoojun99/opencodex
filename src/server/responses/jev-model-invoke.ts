@@ -125,6 +125,7 @@ export function createJevModelInvoker(context: JevModelInvokerContext): JevModel
   return async ({ model, instructions, input, signal, withoutQuota }) => {
     const effort = jevDecisionReasoningEffort(context.config, model);
     let body = serializeJevModelRequest({ model, instructions, input }, effort);
+    /** True when the serialized decision request exceeds the request byte limit. */
     const oversized = () => new TextEncoder().encode(body).byteLength > JEV_MAX_REQUEST_BYTES;
     let quotaOmitted = false;
     if (oversized() && withoutQuota) {

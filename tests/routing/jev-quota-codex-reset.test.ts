@@ -21,16 +21,19 @@ beforeEach(() => {
   clearMainAccountInfoCache();
 });
 afterEach(() => { clearAccountQuota(); resetMainCodexAccountIdentityTrackingForTests(); clock.mockRestore(); home.remove(); });
+/** Capture a live main quota writer for the fixture identity and credential. */
 function mainWriter() {
   observeMainQuotaIdentity("fixture-main");
   setMainAccountCredentialPresence(true);
   return observeMainQuotaCredential("fixture-access", "fixture-main")!;
 }
+/** Save a fixture pool credential and capture its quota writer. */
 function poolWriter() {
   const credential = { accessToken: "fixture-access", refreshToken: "fixture-refresh", expiresAt: now + 60_000, chatgptAccountId: "fixture-subject" };
   const generation = saveCodexAccountCredential("fixture", credential);
   return { generation, writer: capturePoolQuotaWriter("fixture", { ...credential, generation })! };
 }
+/** Loaded decision windows of the first account for a provider. */
 const windows = (provider: string) => readLoadedDecisionQuotaPool(provider)![0]!.windows;
 
 for (const reset of ["NaN", "Infinity", "-1", "invalid", ""]) {
@@ -113,4 +116,13 @@ test("parsed WHAM projection keeps its producer age instead of acquiring a commi
   setAccountQuotaFromParsed("fixture", quota, undefined, undefined, null, { writer: pool.writer, observedAt: Date.now(), source: "wham", raw: quota }, true);
   expect(windows("codex")![0]!.observedAt).toBe(now);
   expect(jevQuotaSignalFromWindows(windows("codex"), "gpt-6-astra", Date.now()).tier).toBe("unknown");
+});
+
+test("a live main writer without explicit decision evidence publishes no advisory window from display or policy data", () => {
+  const writer = mainWriter();
+  const quota = parseUsageQuota({ rate_limit: { primary_window: { used_percent: 95, reset_at: (now + 3_600_000) / 1000 } } })!;
+  setAccountQuotaFromParsed("__main__", quota, undefined, writer, quota);
+  expect(getAccountQuota("__main__")).toMatchObject({ weeklyPercent: 95 });
+  expect(getMainPolicyQuota()).toMatchObject({ weeklyPercent: 95 });
+  expect(readLoadedDecisionQuotaPool("codex-main")?.flatMap(row => row.windows ?? []) ?? []).toEqual([]);
 });

@@ -444,6 +444,7 @@ export function beginNativeMainReauth(): {
   };
 }
 
+/** Resolve the main account access token from the owned auth.json read, refreshing through the token endpoint when needed, or return null when no usable credential exists. */
 async function resolveMainAccountToken(
   dependencies: NativeMainRefreshDependencies = {},
   rejectedAccessToken?: string,

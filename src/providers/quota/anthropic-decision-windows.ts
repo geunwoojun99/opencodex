@@ -1,14 +1,18 @@
 /** Raw advisory projection; compatibility display clamping/rounding remains unchanged. */
 import type { DecisionQuotaWindow } from "../quota-decision-snapshot";
 import { normalizeResetAt, toFiniteNumber } from "../quota-wire";
+/** Return a plain object value, or undefined for non-objects and arrays. */
 const record = (value: unknown): Record<string, unknown> | undefined =>
   value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+/** Normalize a reset value; an explicit invalid reset becomes NaN so it cannot read as an undated valid measurement. */
 function reset(value: unknown): number | undefined {
   // Explicit invalid reset must not become an apparently undated valid measurement.
   return value === undefined || value === null ? undefined : normalizeResetAt(value) ?? NaN;
 }
+/** Extract raw decision windows (5h, weekly and per-model families) from an Anthropic usage body, keeping invalid resets distinct from display parsing. */
 export function rawAnthropicUsageWindows(body: Record<string, unknown>, observedAt: number): DecisionQuotaWindow[] {
   const rows: DecisionQuotaWindow[] = [];
+  /** Append one window when its percentage is a finite number, carrying its normalized reset. */
   const add = (window: DecisionQuotaWindow["window"], raw: unknown, percentField: string) => {
     const row = record(raw);
     const percent = toFiniteNumber(row?.[percentField]);
@@ -28,6 +32,7 @@ export function rawAnthropicUsageWindows(body: Record<string, unknown>, observed
   }
   return rows;
 }
+/** Extract decision windows from Anthropic unified rate-limit response headers, converting utilization fractions to percentages. */
 export function rawAnthropicHeaderWindows(headers: Headers, observedAt: number): DecisionQuotaWindow[] {
   const rows: DecisionQuotaWindow[] = [];
   for (const [window, wire] of [["5h", "5h"], ["weekly", "7d"], ["fable", "7d_oi"]] as const) {

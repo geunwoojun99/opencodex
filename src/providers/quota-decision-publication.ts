@@ -6,6 +6,7 @@ import { publishDecisionAccountQuota, type DecisionQuotaWindow } from "./quota-d
 const rawWindows = new WeakMap<ProviderQuota, readonly DecisionQuotaWindow[]>();
 /** Producer retains raw advisory projection separately from unchanged display/hard policy. */
 export function bindRawDecisionWindows(quota: ProviderQuota, windows: readonly DecisionQuotaWindow[]): void { rawWindows.set(quota, windows); }
+/** Project a provider quota report onto decision windows, preferring raw windows bound by the producer over the display fields. */
 export function providerDecisionWindows(quota: ProviderQuota): DecisionQuotaWindow[] {
   const raw = rawWindows.get(quota);
   if (raw) return raw.map(row => ({ ...row }));
@@ -23,6 +24,7 @@ export function providerDecisionWindows(quota: ProviderQuota): DecisionQuotaWind
   }
   return windows;
 }
+/** Publish decision windows for one Anthropic pool account, bound to its credential generation; a null quota publishes no windows. */
 export function publishAnthropicDecisionQuota(id: string, generation: string, quota: ProviderQuota | null, partial = false): void {
   publishDecisionAccountQuota("anthropic", id, generation, quota ? providerDecisionWindows(quota) : [], partial);
 }
@@ -39,6 +41,7 @@ export function bindRawCodexDecisionResets(raw: CodexObservation, resets: Record
   });
   rawCodexWindows.set(raw, windows);
 }
+/** Build decision windows from a raw Codex observation, stamping each with the producer clock rather than a merge-time clock. */
 function codexDecisionWindows(raw: CodexObservation, observedAt: number): DecisionQuotaWindow[] {
   const windows: DecisionQuotaWindow[] = [];
   for (const kind of ["short", "weekly", "monthly"] as const) {
@@ -49,6 +52,7 @@ function codexDecisionWindows(raw: CodexObservation, observedAt: number): Decisi
   }
   return windows;
 }
+/** Publish decision windows for a Codex or main account from the raw observation, never from the display merge, so carried windows cannot acquire a fresh clock. */
 export function publishCodexDecisionQuota(id: string, generation: number, raw: CodexObservation, observedAt: number, provider = "codex", partial = true): void {
   // RAW observation, never the display merge: carried windows cannot acquire a fresh clock.
   publishDecisionAccountQuota(provider, id, generation, rawCodexWindows.get(raw) ?? codexDecisionWindows(raw, observedAt), partial);

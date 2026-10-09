@@ -278,6 +278,7 @@ export async function fetchMainAccountInfoWhileOwned(
   let quotaPhase: "request" | "body" | "decode" | "publish" = "request";
   let quotaRefreshGeneration = captureMainAccountIdentityGeneration();
   const readState: { owner?: CodexUsageOwner<MainAccountInfoFetchResult>; usable: boolean } = { usable: false };
+  /** Perform one single-flight main-account usage read: classify auth failures and publish parsed quota and decision evidence only while the dispatch and credential are still current. */
   const read = async (): Promise<MainAccountInfoFetchResult> => {
     try {
       let dispatchSequence = 0;

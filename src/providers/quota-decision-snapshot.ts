@@ -38,21 +38,26 @@ export function observeDecisionKeyCredential(reference: string, resolved: string
   credentialVersions.set(referenceId, version);
 }
 const keys = new Map<string, { root: string; epoch: number; configGeneration: number; policy: string; windows: readonly DecisionQuotaWindow[] }>();
+/** Compose the per-provider, per-account map key. */
 const accountKey = (provider: string, id: string) => `${provider}\0${id}`;
 // Private policy digest, never returned or serialized. Resolving the configured credential is
 // the collector's responsibility; request reads only this already-published generation.
+/** Digest the provider settings a key-based evidence row was published under; it is never returned or serialized. */
 function keyPolicy(provider: OcxProviderConfig): string {
   return createHash("sha256").update(JSON.stringify([
     provider.adapter, provider.baseUrl, provider.authMode, provider.apiKey, provider.apiKeyPool, provider.headers,
     provider.apiKey && credentialVersions.get(createHash("sha256").update(provider.apiKey).digest("hex")),
   ])).digest("hex");
 }
+/** Drop all key-based decision evidence and advance the epoch so earlier publications cannot be read. */
 export function invalidateDecisionKeyQuotas(): void { keyEpoch++; keys.clear(); }
+/** Publish decision windows for a single-key provider; pooled, disabled or non-key providers are never published, and the table is bounded. */
 export function publishDecisionKeyQuota(name: string, provider: OcxProviderConfig, windows: readonly DecisionQuotaWindow[]): void {
   if (name.length > 1024 || provider.disabled || (provider.authMode ?? "key") !== "key" || (provider.apiKeyPool?.length ?? 0) > 1) return;
   if (keys.size >= 256 && !keys.has(name)) keys.delete(keys.keys().next().value!);
   keys.set(name, { root: getConfigDir(), epoch: keyEpoch, configGeneration: captureConfigGeneration(), policy: keyPolicy(provider), windows: copyWindows(windows) });
 }
+/** Read key-based evidence only when the config root, epoch, generation and provider policy still match what was published. */
 export function readLoadedDecisionKeyQuota(name: string, provider: OcxProviderConfig): readonly DecisionQuotaWindow[] | undefined {
   const row = keys.get(name);
   if (!row || provider.disabled || (provider.authMode ?? "key") !== "key" || (provider.apiKeyPool?.length ?? 0) > 1
@@ -60,6 +65,7 @@ export function readLoadedDecisionKeyQuota(name: string, provider: OcxProviderCo
     || row.policy !== keyPolicy(provider)) return undefined;
   return row.windows.map(row => ({ ...row }));
 }
+/** Replace a pool provider's roster; an oversized pool makes the whole pool unknown rather than hiding usable rows. */
 export function publishDecisionQuotaRoster(provider: string, rows: readonly DecisionQuotaAccount[]): void {
   if (!POOL_PROVIDERS.has(provider)) return;
   const old = rosters.get(provider);
@@ -84,6 +90,7 @@ export function publishDecisionQuotaRoster(provider: string, rows: readonly Deci
   }
   rosters.set(provider, { root: getConfigDir(), accounts: rows.map(row => ({ id: row.id, generation: row.generation, usable: row.usable })) });
 }
+/** Publish windows for a roster account at the matching credential generation; a partial observation retains other windows of the same generation. */
 export function publishDecisionAccountQuota(provider: string, id: string, generation: string | number, windows: readonly DecisionQuotaWindow[], partial = false): void {
   const roster = rosters.get(provider);
   if (roster?.root !== getConfigDir() || !roster.accounts.some(row => row.id === id && row.generation === generation)) return;
@@ -92,6 +99,7 @@ export function publishDecisionAccountQuota(provider: string, id: string, genera
   const retained = partial && previous?.generation === generation ? previous.windows.filter(row => !windows.some(next => row.window === next.window)) : [];
   accounts.set(key, { generation, windows: copyWindows([...retained, ...windows]) });
 }
+/** Read a pool's already-loaded roster with generation-matched windows; undefined when nothing is loaded for the current config root. */
 export function readLoadedDecisionQuotaPool(provider: string): readonly { id: string; usable: boolean; windows?: readonly DecisionQuotaWindow[] }[] | undefined {
   const roster = rosters.get(provider);
   if (roster?.root !== getConfigDir()) return undefined;
@@ -101,6 +109,7 @@ export function readLoadedDecisionQuotaPool(provider: string): readonly { id: st
     return { id: row.id, usable: row.usable && quarantine !== true && quarantine !== row.generation, ...(evidence?.generation === row.generation ? { windows: evidence.windows.map(window => ({ ...window })) } : {}) };
   });
 }
+/** Mark a roster account usable or unusable, optionally scoped to one credential generation so an unrelated generation is left intact. */
 export function setDecisionAccountUsable(provider: string, id: string, usable: boolean, generation?: string | number): void {
   const roster = rosters.get(provider);
   if (roster?.root !== getConfigDir()) return;
@@ -111,9 +120,11 @@ export function setDecisionAccountUsable(provider: string, id: string, usable: b
     if (generation === undefined || unusable.get(key) !== true) unusable.delete(key);
   } else if (generation === undefined || unusable.get(key) !== true) unusable.set(key, generation ?? true);
 }
+/** Drop published account windows for a provider or one account, or for every provider when none is given. */
 export function clearDecisionAccountQuotas(provider?: string, id?: string): void {
   for (const key of accounts.keys()) if (!provider || key.startsWith(`${provider}\0`) && (!id || key === accountKey(provider, id))) accounts.delete(key);
 }
+/** Copy only known window kinds into the bounded evidence table, so callers cannot retain a mutable reference. */
 function copyWindows(windows: readonly DecisionQuotaWindow[]): DecisionQuotaWindow[] {
   if (windows.length > MAX_WINDOWS) return [];
   return windows.filter(row => ["5h", "weekly", "monthly", "fable", "opus", "sonnet"].includes(row.window)).map(row => ({ window: row.window, percent: row.percent, observedAt: row.observedAt, ...(row.resetAt !== undefined ? { resetAt: row.resetAt } : {}) }));

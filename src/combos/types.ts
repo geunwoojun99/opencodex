@@ -136,6 +136,7 @@ export interface ComboValidationOptions {
   excludeComboId?: string;
 }
 
+/** Validate a raw combo definition against the configured providers and return every issue found, without mutating the input. */
 export function comboConfigIssues(
   id: string,
   raw: unknown,
@@ -476,6 +477,7 @@ export function comboConfigError(
   return comboConfigIssues(id, raw, providers, options)[0]?.message ?? null;
 }
 
+/** Normalize a validated combo definition into its canonical form: trimmed strings, defaults and the opt-in quota signal fields. */
 export function normalizeComboConfig(raw: OcxComboConfig): NormalizedComboConfig {
   const alias = typeof raw.alias === "string" ? raw.alias.trim() : "";
   const displayName = typeof raw.displayName === "string" ? raw.displayName.trim() : "";

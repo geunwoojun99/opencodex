@@ -29,6 +29,7 @@ export type AnthropicQuotaRecoveryResult = Readonly<{
   isCurrent(): boolean;
 }>;
 
+/** Create the cooldown-recovery probe owner for one Anthropic instance; its results are credential- and generation-bound before they may publish. */
 function createAnthropicCooldownRecovery(instance: AnthropicInstanceId) {
   const familyGeneration = (accountId: string) => anthropicModelQuotaFor(instance).anthropicFamilyQuotaGeneration(accountId);
 
@@ -184,6 +185,7 @@ function createAnthropicCooldownRecovery(instance: AnthropicInstanceId) {
     }
     const publicationGeneration = anthropicCooldownGeneration(accountId);
     const publicationFamilyGeneration = familyGeneration(accountId);
+    /** True while the probed credential, cooldown generation and family generation are unchanged and publication is still permitted. */
     const isCurrent = () => probe.isCurrentCredential()
       && anthropicCooldownGeneration(accountId) === publicationGeneration
       && familyGeneration(accountId) === publicationFamilyGeneration

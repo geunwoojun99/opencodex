@@ -116,6 +116,7 @@ function sparseComboConfig<T extends {
   };
 }
 
+/** Handle the `/api/combos` management routes (list, save, delete and related combo endpoints), validating and preserving the opt-in quota signal fields; null when no route matches. */
 export async function handleComboRoutes(ctx: ManagementContext): Promise<Response | null> {
   const { req, url, config, deps, convergeCodexCatalog, syncClaudeAgentDefsBestEffort } = ctx;
 

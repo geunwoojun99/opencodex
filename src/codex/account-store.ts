@@ -114,6 +114,7 @@ function normalizeRecord(value: CodexAccountCredentials | CodexAccountCredential
   return undefined;
 }
 
+/** Read the Codex account record store from disk with hardened permissions, and republish the secret-free decision-quota roster derived from it. */
 function loadCodexAccountRecordStore(): CodexAccountStore {
   const path = codexAccountsPath();
   hardenConfigDir();
@@ -135,6 +136,7 @@ function loadCodexAccountRecordStore(): CodexAccountStore {
   }
 }
 
+/** Atomically write the Codex account store and republish the decision-quota roster so published evidence tracks the persisted credentials. */
 function persist(store: CodexAccountStore): void {
   const dir = getConfigDir();
   assertNotRealHomeUnderTest(dir);

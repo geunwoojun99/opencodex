@@ -5,6 +5,7 @@ export interface JevModelRequestBody {
   instructions: string;
   input: string;
 }
+/** Serialize the streaming decision-model request body, adding the reasoning effort only when one is given. */
 export function serializeJevModelRequest(request: JevModelRequestBody, effort?: string): string {
   return JSON.stringify({
     model: request.model,

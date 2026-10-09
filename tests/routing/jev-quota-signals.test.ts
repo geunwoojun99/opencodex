@@ -15,6 +15,7 @@ import { createTempHome, type TempHome } from "../helpers/temp-home";
 import type { OcxConfig } from "../../src/types";
 
 const now = 2_000_000_000_000;
+/** Build a weekly decision window with the given percentage. */
 const window = (percent: number, extra: Partial<DecisionQuotaWindow> = {}): DecisionQuotaWindow => ({ window: "weekly", percent, observedAt: now, ...extra });
 const candidates: JevCandidate[] = [{ key: "p/a", provider: "p", model: "a", reasoningEfforts: ["low"] }, { key: "p/b", provider: "p", model: "b", reasoningEfforts: ["low"] }];
 const fallback = { targetKey: "p/a", effort: "low" as const };
@@ -185,7 +186,11 @@ test("System One quota descriptions stay scalar and denied destinations never re
   expect(posted).toContain("Quota nearly_exhausted");
   expect(posted).not.toContain("private-account-fixture"); expect(posted).not.toContain("private-generation-fixture");
   let reads = 0;
-  Object.defineProperty(config, "anthropicAccountPool", { get() { reads++; throw new Error("quota read before destination authorization"); }, configurable: true });
+  Object.defineProperty(config, "anthropicAccountPool", {
+    /** Count and reject any quota-pool read made before the destination is authorized. */
+    get() { reads++; throw new Error("quota read before destination authorization"); },
+    configurable: true,
+  });
   posted = "";
   const denied = await resolveJevDecision({ ...options, isDestinationAllowed: () => false });
   expect(denied.gate).toBe("invalid"); expect(reads).toBe(0); expect(posted).toBe("");

@@ -270,6 +270,7 @@ function parseClaudeLimit(value: unknown): ProviderQuotaWindow | null {
 /** Claude's OAuth usage endpoint, probed with ONE account's own bearer token. */
 const anthropicUsageInflight = new Map<string, Promise<ProviderQuota | null>>();
 
+/** Read the Anthropic OAuth usage endpoint for an access token and return the parsed quota, or null on a non-OK or malformed response. */
 async function readAnthropicUsageQuota(accessToken: string): Promise<ProviderQuota | null> {
   const response = await fetch("https://api.anthropic.com/api/oauth/usage", {
     headers: {

@@ -13,6 +13,7 @@ import type { OcxConfig } from "../../src/types";
 
 const now = 2_000_000_000_000;
 const body = { input: 'Fixture "task" \\ with UTF-8 界' };
+/** UTF-8 byte length of a string. */
 const bytes = (text: string) => new TextEncoder().encode(text).byteLength;
 let home: TempHome;
 let clock: ReturnType<typeof spyOn>;
@@ -23,12 +24,14 @@ beforeEach(() => {
   resetLifecycleDrainStateForTests();
 });
 afterEach(() => { invalidateDecisionKeyQuotas(); clock.mockRestore(); home.remove(); });
+/** Minimal single-provider config for decision-model budget tests. */
 function config(reasoning = false): OcxConfig {
   return { port: 0, defaultProvider: "p", providers: { p: {
     adapter: "openai-chat", baseUrl: "https://fixture.invalid/v1", apiKey: "fixture-key", models: ["judge"],
     ...(reasoning ? { modelReasoningEfforts: { judge: ["low", "high"] } } : {}),
   } } };
 }
+/** Build the largest candidate set whose decision request still fits the byte limit. */
 function nearLimitCandidates(): JevCandidate[] {
   for (let size = 100; size <= 500; size++) {
     const candidates = Array.from({ length: 42 }, (_, i) => ({ key: `p/${i}`, provider: "p", model: '界'.repeat(size) + i, reasoningEfforts: ["low"] as const }));
@@ -41,6 +44,7 @@ function nearLimitCandidates(): JevCandidate[] {
   }
   throw new Error("fixture must straddle the serialized quota boundary");
 }
+/** Common decision options for the budget tests. */
 function options(cfg: OcxConfig, candidates: JevCandidate[], invokeModel: JevModelInvoke) {
   return { body, config: cfg, candidates, fallback: { targetKey: "p/0", effort: "low" as const }, decisionModel: "p/judge", invokeModel, now: () => now };
 }
