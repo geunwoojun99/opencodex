@@ -232,6 +232,8 @@ export interface RequestLogContext {
    * message) extracted from a `response.failed` SSE payload or non-streaming error body, so the
    * request log / GUI shows the actual upstream failure rather than only the HTTP-mapped code. */
   upstreamError?: string;
+  upstreamErrorCode?: string;
+  upstreamRequestId?: string;
   /** HTTP status derived from a terminal `response.failed` SSE payload (429/401/503/etc.). */
   terminalHttpStatus?: number;
   /** Recognized structured terminal code whose exact identity must survive status mapping. */
@@ -254,6 +256,8 @@ export interface RequestLogContext {
   conversationStateScrub?: "account-change";
   transportPhase?: "pre_headers" | "mid_stream" | "terminal_sse";
   terminalSource?: "upstream" | "synthetic";
+  /** Closed failure evidence supplied by the transport, never inferred from provider text. */
+  causeHint?: RequestFailureCause;
   /** Bounded route-decision trace (RI-01); never contains secrets. */
   routeDecision?: RouteDecisionTraceV1;
   /** Full eligible provider/model membership from a policy route; never logged. */
@@ -342,6 +346,8 @@ export interface RequestLogEntry {
   closeReason?: "terminal" | "client_cancel" | "non_stream" | "body_stall" | "body_overflow";
   /** Secret-redacted upstream error reason, surfaced in /api/logs and the GUI detail modal. */
   upstreamError?: string;
+  upstreamErrorCode?: string;
+  upstreamRequestId?: string;
   usageStatus: UsageStatus;
   usage?: OcxUsage;
   totalTokens?: number;
@@ -840,6 +846,7 @@ export function requestLogErrorCode(
   status: number,
   upstreamError?: string,
   terminalErrorCode?: string,
+  replayRefusal = false,
 ): string | undefined {
   if (status >= 200 && status < 400) return undefined;
   // A structured terminal code is authoritative even when the provider message is localized,
@@ -868,10 +875,8 @@ export function requestLogErrorCode(
     return "permission_denied";
   }
   if (status === 429) {
-    // A refused ambiguous reset answers 429 by design (it must not invite a client
-    // retry that could duplicate inference); classify it by its message so the log
-    // distinguishes a proxy refusal from provider throttling.
-    if (upstreamError?.trim() && isUpstreamResetReplayRefusedMessage(upstreamError)) {
+    // Prefer transport provenance; retain the legacy message fallback for older callers.
+    if (replayRefusal || (upstreamError?.trim() && isUpstreamResetReplayRefusedMessage(upstreamError))) {
       return UPSTREAM_RESET_REPLAY_REFUSED_CODE;
     }
     return "rate_limit_exceeded";
@@ -1095,6 +1100,24 @@ export function inspectResponseLogSsePayloadParsed(
  * a non-streaming JSON error body. We keep the FIRST non-empty reason (the original failure) and
  * run it through redactSecretString so secrets never reach /api/logs. Pure; safe on any text.
  */
+const UPSTREAM_DIAGNOSTIC_TOKEN = /^[A-Za-z0-9_.:-]{1,128}$/;
+
+function noteBoundedDiagnostic(
+  logCtx: RequestLogContext,
+  field: "upstreamErrorCode" | "upstreamRequestId",
+  value: unknown,
+): void {
+  if (logCtx[field] !== undefined) return;
+  if (typeof value !== "string" || !UPSTREAM_DIAGNOSTIC_TOKEN.test(value)) return;
+  logCtx[field] = value;
+  const status = logCtx.terminalHttpStatus;
+  if (status === undefined || status >= 500) console.warn(`[opencodex] upstream failure${status ? ` status=${status}` : ""}${logCtx.upstreamErrorCode ? ` code=${logCtx.upstreamErrorCode}` : ""}${logCtx.upstreamRequestId ? ` request_id=${logCtx.upstreamRequestId}` : ""}`);
+}
+
+export function noteUpstreamRequestId(logCtx: RequestLogContext, headers: Headers): void {
+  noteBoundedDiagnostic(logCtx, "upstreamRequestId", headers.get("openai-request-id") ?? headers.get("x-request-id"));
+}
+
 function captureUpstreamError(logCtx: RequestLogContext, text: string | null): void {
   if (!text) return;
   let parsed: unknown | undefined;
@@ -1114,14 +1137,19 @@ function captureUpstreamErrorParsed(
   if (parsed !== undefined && parsed !== null) {
     const json = parsed as {
       type?: unknown;
-      error?: { message?: unknown };
-      last_error?: { message?: unknown };
+      error?: { message?: unknown; code?: unknown };
+      last_error?: { message?: unknown; code?: unknown };
       response?: {
         error?: { type?: unknown; code?: unknown; message?: unknown };
         incomplete_details?: { reason?: unknown; message?: unknown };
       };
     };
     captureTerminalHttpStatus(logCtx, json);
+    noteBoundedDiagnostic(
+      logCtx,
+      "upstreamErrorCode",
+      json.error?.code ?? json.response?.error?.code ?? json.last_error?.code,
+    );
     const reason = json?.response?.incomplete_details?.reason;
     if (json.type === "response.incomplete"
       && logCtx.terminalIncompleteReason === undefined
@@ -1440,12 +1468,12 @@ export function addFinalRequestLog(
   const effectiveStatus = status >= 500 && logCtx.upstreamError && isClientClosedMessage(logCtx.upstreamError)
     ? 499
     : status;
-  // A locally assigned code wins: it names a refusal this proxy made itself, which no
-  // status-plus-upstream-message classification can reconstruct.
+  // Locally assigned codes name proxy refusals that status and upstream text cannot reconstruct.
   const errorCode = logCtx.errorCode ?? requestLogErrorCode(
     effectiveStatus,
     logCtx.upstreamError,
     logCtx.terminalErrorCode,
+    logCtx.causeHint === "transport-ambiguous" && logCtx.terminalSource === "synthetic",
   );
   // A response.failed whose classified status is 499 is still a client cancel, not an upstream
   // terminal failure — keep /api/logs closeReason aligned with that.
@@ -1475,6 +1503,7 @@ export function addFinalRequestLog(
     ...(logCtx.transportPhase ? { transportPhase: logCtx.transportPhase } : {}),
     ...(logCtx.terminalSource ? { terminalSource: logCtx.terminalSource } : {}),
     outputObserved: logCtx.firstOutputMs !== undefined,
+    ...(logCtx.causeHint ? { causeHint: logCtx.causeHint } : {}),
     locallyAnswered: logCtx.localTerminalReason !== undefined,
     ...(logCtx.activeAttempt ? { attempt: logCtx.activeAttempt } : {}),
   });
@@ -1593,6 +1622,8 @@ export function addFinalRequestLog(
     ...(meta?.terminalStatus ? { terminalStatus: meta.terminalStatus } : {}),
     ...(closeReason ? { closeReason } : {}),
     ...(logCtx.upstreamError ? { upstreamError: logCtx.upstreamError } : {}),
+    ...(logCtx.upstreamErrorCode ? { upstreamErrorCode: logCtx.upstreamErrorCode } : {}),
+    ...(logCtx.upstreamRequestId ? { upstreamRequestId: logCtx.upstreamRequestId } : {}),
     usageStatus,
     ...(loggedUsage ? { usage: loggedUsage } : {}),
     ...(totalTokens !== undefined ? { totalTokens } : {}),

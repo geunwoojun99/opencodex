@@ -135,7 +135,7 @@ export function createJevModelInvoker(context: JevModelInvokerContext): JevModel
     if (oversized()) {
       throw new JevModelInvokeError("malformed", "decision request too large");
     }
-    const lease = tryAdmitTurn();
+    const lease = tryAdmitTurn(undefined, signal);
     if (!lease) throw new JevModelInvokeError("network", "decision turn not admitted");
     const childLog: RequestLogContext = { model, provider: "unknown", inboundProtocol: "responses" };
     let usage: Record<string, number> | undefined;

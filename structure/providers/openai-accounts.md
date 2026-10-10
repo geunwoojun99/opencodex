@@ -280,6 +280,22 @@ API-key and custom forward destinations preserve their metadata. See [Responses 
 
 Listener startup diagnostics follow [the runtime lifecycle contract](../runtime.md#lifecycle); malformed optional listener blocks follow [config loading](../config.md#config-surface).
 
+## Native-main refresh cancellation
+
+`src/codex/main-account.ts` takes the CODEX_HOME exclusive claim, then the
+per-grant refresh file lock. Caller cancellation can stop either wait and is
+checked before the token exchange starts. Once started, the exchange observes
+only the refresh's own 30-second timeout: success rotates and retires the old
+refresh token, so cancellation cannot discard the only live grant. Both locks
+await the callback through completion, including publication; aborting their
+wait signal does not release an acquired lock while the exchange runs.
+Successful refresh publishes access and refresh tokens and advances the
+credential mutation epoch before clearing grant rejection and applicable
+reauth quarantine, then throws the caller's abort reason if cancelled.
+Snapshot and identity checks still refuse an external auth writer, including
+when the caller also cancelled. Same-identity device reauth obtains a new login
+grant rather than rotating the existing grant and keeps its pre-publication fence.
+
 ## Manual account pause and resume
 
 Manual pause/resume in `src/codex/auth-api/account-pause-group.ts` resolves existing native-main
@@ -397,6 +413,8 @@ caches are account-isolated, so each hop restarts from a cold prefix and a 7k-to
 true for unknown usage, correctly for an unbound pick — would trade a warm prefix for an unmeasured
 account. `CODEX_UNKNOWN_USAGE_SCORE` is 101, so the second bar excludes an unobserved destination
 without a special case.
+
+`src/codex/routing/failure-window.ts` keeps a 60-second sliding ratio beside the consecutive streak. Twenty or more terminal samples at a 25% transient-failure ratio mark the account degraded; it clears only after the ratio stays at or below 10% for 30 seconds. The ratio does not depend on completion order. Degraded accounts leave the unbound candidate list, so new threads move. A live thread binding is left alone, and a manual pin stays in place unless `codexPinnedTransientPolicy` is `detour-new-threads`. The default `hold` logs that the pin is degraded and keeps using it. `codexFailureWindow: false` leaves steering to the consecutive counter. Nothing here resends a turn that already started.
 
 Movement is therefore bounded by the number of accounts rather than the number of turns. The rule
 narrows a preference and never a refusal: a 429/402 with no success since, a failover streak, pause,
