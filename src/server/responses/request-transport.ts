@@ -1,4 +1,5 @@
 import { SendBudgetExhaustedError } from "../../lib/upstream-retry";
+import { anthropicBillingPhysicalFetch } from "../../providers/anthropic-billing-ownership";
 import { rebindPhysicalSend } from "../../lib/request-execution-budget";
 import { anthropicModelQuotaFor } from "../../oauth/anthropic-model-quota";
 import { anthropicRatePolicyFor } from "../../oauth/anthropic-rate-limit-policy";
@@ -87,7 +88,7 @@ import {
 import type { AttemptRecoveryKind } from "../../usage/log";
 import { bindAttemptDeliveryRecorder } from "../../usage/attempt-delivery";
 import { resolvePassiveRouteSubjectId } from "../passive-route-linker";
-import { clientCancelledResponse } from "./core-errors";
+import { anthropicPoolCooldownResponse, clientCancelledResponse } from "./core-errors";
 import { acquireAccountLease, KIRO_ACCOUNT_WAIT_MS } from "../../oauth/kiro-account-load";
 
 /** Return a renewed Chat wire to the native owner before sending inference. */
@@ -305,15 +306,40 @@ export async function prepareResponsesTransport(
   let copilotSessionExpiresAt = Infinity;
   let copilotNegotiationRefreshed = false;
   let copilotAutoAdapter: OcxProviderConfig["adapter"] | undefined;
+  /** The operator-configured wire, captured before the first Auto negotiation can rewrite route.provider. */
+  let copilotConfiguredWire: { adapter: OcxProviderConfig["adapter"]; responsesPath?: string;
+    chatCompletionsPath?: string; apiVersion?: string } | undefined;
+  /** Start every negotiation from the configured wire, so a previous credential's Auto adapter,
+   *  endpoint and session headers never carry over to a credential that keeps the named model. */
+  const copilotNegotiationBase = (provider: OcxProviderConfig): OcxProviderConfig => {
+    if (!copilotConfiguredWire) return provider;
+    const headers = new Headers(provider.headers);
+    headers.delete("Copilot-Session-Token");
+    if (copilotConfiguredWire.apiVersion === undefined) headers.delete("X-GitHub-Api-Version");
+    else headers.set("X-GitHub-Api-Version", copilotConfiguredWire.apiVersion);
+    const base: OcxProviderConfig = { ...provider, adapter: copilotConfiguredWire.adapter,
+      headers: Object.fromEntries(headers) };
+    if (copilotConfiguredWire.responsesPath === undefined) delete base.responsesPath;
+    else base.responsesPath = copilotConfiguredWire.responsesPath;
+    if (copilotConfiguredWire.chatCompletionsPath === undefined) delete base.chatCompletionsPath;
+    else base.chatCompletionsPath = copilotConfiguredWire.chatCompletionsPath;
+    return base;
+  };
   /** Resolve the request's ephemeral wire selection and recover at most one OAuth negotiation 401. */
   const resolveCopilotSelection = async (requestParsed: OcxParsedRequest, insideDispatch = false): Promise<void> => {
     if (route.providerName !== "github-copilot" || route.provider.authMode === "forward") return;
+    copilotConfiguredWire ??= {
+      adapter: route.provider.adapter,
+      responsesPath: route.provider.responsesPath,
+      chatCompletionsPath: route.provider.chatCompletionsPath,
+      apiVersion: new Headers(route.provider.headers).get("X-GitHub-Api-Version") ?? undefined,
+    };
     /** Fence control-plane sends to the captured credential; reuse an already-held dispatch concurrency lease. */
     const negotiate = () => {
       const binding: DispatchBinding | undefined = oauthSelection && servingOAuthSnapshot
         ? { kind: "oauth", selection: { ...oauthSelection }, snapshot: servingOAuthSnapshot }
         : { kind: "api-key", provider: { ...route.provider } };
-      return resolveCopilotAuto(route.provider, copilotRequestedModel, requestParsed,
+      return resolveCopilotAuto(copilotNegotiationBase(route.provider), copilotRequestedModel, requestParsed,
         options.abortSignal ?? req.signal, /** Fence each negotiation send against the captured credential binding before touching the network. */
           () => selectionIsCurrent(binding), !insideDispatch);
     };
@@ -672,7 +698,7 @@ export async function prepareResponsesTransport(
             }
             commitKeyAttemptSend();
             response = await sendWithConnectionPolicy(
-              fetchImpl,
+              anthropicBillingPhysicalFetch(fetchImpl, route.providerName, route.provider),
               destination,
               { ...dispatchInit, redirect: "manual" },
               { providerName: route.providerName, provider: route.provider },
@@ -759,12 +785,9 @@ export async function prepareResponsesTransport(
           // Route names may resemble account IDs; log only the matched rule position.
           if (anthropicRouteDecision) console.warn(`[${anthropicInstance}-pool] route:#${anthropicRouteDecision.position} ${selection.reason}; answering locally`);
           if (selection.reason === "all-cooled") {
-            const retryAfterSec = anthropicRouting!.getAnthropicPoolRetryAfterSeconds(Date.now(), anthropicRouteDecision, route.modelId);
-            return formatErrorResponse(
-              429,
-              "rate_limit_error",
-              anthropicRouteDecision ? "Anthropic OAuth accounts for this model route are temporarily rate-limited" : "All Anthropic OAuth accounts are temporarily rate-limited",
-              retryAfterSec !== null ? { retryAfter: String(retryAfterSec) } : undefined,
+            return anthropicPoolCooldownResponse(
+              anthropicRouting!.anthropicPoolCooldownError(Date.now(), anthropicRouteDecision, route.modelId),
+              { comboAttempt: options.comboAttempt, logCtx },
             );
           }
           return formatErrorResponse(401, "authentication_error", anthropicRouteDecision ? "No eligible Anthropic OAuth account for this model route" : "No eligible Anthropic OAuth account available");

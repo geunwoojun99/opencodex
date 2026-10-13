@@ -1,5 +1,6 @@
 import type { Server, ServerWebSocket } from "bun";
 import type { StartServerDeps } from "./startup-warnings";
+import { isLinkManagementPath } from "../../link/management-routes";
 import {
   GUI_PAIRING_EXCHANGE_BODY_LIMIT,
   REMOTE_WORKSPACE_PAIRING_BODY_LIMIT,
@@ -96,6 +97,7 @@ import {
   isAllowedManagementOrigin,
   isApiAuthRequired,
   isLoopbackHostname,
+  markTrustedHubManagementRequest,
   jsonResponse,
   admissionFields,
   resolveApiAuth,
@@ -313,6 +315,11 @@ export function createServeOptions(ctx: ServeOptionsContext) {
       maxRequestBodySize: inboundBodyLimitBytes,
       async fetch(req: Request, requestServer: Server<WsData>): Promise<Response> {
       const ingress = ingressForServer(requestServer);
+      // Bind management-origin trust to the actual Bun listener object resolved above.
+      // Neither Host nor any X-Forwarded-* header can manufacture this process-local mark.
+      if (ingress === "hub-management" && config.runtimeRole === "hub") {
+        markTrustedHubManagementRequest(req);
+      }
       const requestUrl = codexCompatibleUrl(req.url);
       const linkPolicyView = ingress === "hub-link" ? linkPolicy() : undefined;
       // The unauthenticated loopback listener (#1102) serves a fixed allowlist and nothing
@@ -367,6 +374,12 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         if (requestUrl.pathname === "/v1/catalog" && requestUrl.search === ""
           && (req.method === "GET" || req.method === "HEAD")
           && admission.kind === "configured") onAuthenticatedCatalog(admission.keyId);
+        // #6957: the Child's read-only view of this Home. Admitted by the link key above and by
+        // the shared table in src/link/management-routes.ts; never reachable on another ingress.
+        if (isLinkManagementPath(requestUrl.pathname)) {
+          const { handleLinkManagementRequest } = await import("./link-management");
+          return withCors(await handleLinkManagementRequest(req, requestUrl, config, requestManagementApiDeps, managementSessionControl), req, policy);
+        }
       }
       const url = requestUrl;
       const admissionOptions = { linkIngress: policy.linkIngress?.allowedKeyIds };
@@ -1594,8 +1607,11 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         // `policy`, not `config`: this route is now served on the unauthenticated loopback
         // listener too (#4236), and only the receiving listener's view produces CORS headers
         // that match the admission decision made above.
-        return runAdmittedHttpTurn(req, policy, async turnAdmissionLease => withCors(
-          await handleChatCompletions(req, config, logCtx, { requestId, start, turnAdmissionLease, admission }),
+        // Promote a caller `x-session-id` before admission, as Responses and Messages do (#6520):
+        // the ChatGPT bridge forwards only canonical session headers, so the raw marker is lost.
+        const sessionReq = withCallerSessionIdentity(req, admission);
+        return runAdmittedHttpTurn(sessionReq, policy, async turnAdmissionLease => withCors(
+          await handleChatCompletions(sessionReq, config, logCtx, { requestId, start, turnAdmissionLease, admission }),
           req,
           policy,
         ), { requestId, start, logCtx });

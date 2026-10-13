@@ -8,11 +8,11 @@ import { saveCredential, getAccountSet, getAccountCredential, credentialGenerati
 import { probeAnthropicQuotaWithRecovery, setAnthropicQuotaAfterSettlementForTests } from "../../src/providers/quota/anthropic-cooldown-recovery";
 import { rawAnthropicUsageWindows, rawAnthropicHeaderWindows } from "../../src/providers/quota/anthropic-decision-windows";
 import { fetchAnthropicUsageQuota } from "../../src/providers/quota/vendor-probes-oauth";
-import { recordAnthropicAccountQuotaFromHeaders } from "../../src/providers/quota/account-cache";
+import { recordAnthropicAccountQuotaFromHeaders, forgetCachedProviderAccountQuota } from "../../src/providers/quota/account-cache";
 import { jevQuotaSignalFromWindows } from "../../src/combos/jev-quota";
 import { keyReport, publishCollectedDecisionQuota } from "../../src/providers/quota/report-cache";
 import { parseOllamaCloudBalance } from "../../src/providers/quota";
-import { resolveProviderApiKey, invalidateResolvedProviderKeyCache } from "../../src/providers/api-key-resolve";
+import { resolveProviderApiKey, resolveProviderApiKeyQuietly, invalidateResolvedProviderKeyCache } from "../../src/providers/api-key-resolve";
 import { createTempHome, type TempHome } from "../helpers/temp-home";
 import type { OcxConfig } from "../../src/types";
 
@@ -208,4 +208,31 @@ test("bounded rosters never hide unknown usable accounts; account-wide quarantin
   expect(jevQuotaSignalFromWindows(readLoadedDecisionQuotaPool("codex")?.[0]?.windows, "a", now).usedPercent).toBe(90);
   publishDecisionQuotaRoster("codex", Array.from({ length: 1025 }, (_, i) => ({ id: String(i), generation: 1, usable: true })));
   expect(readLoadedDecisionQuotaPool("codex")).toBeUndefined();
+});
+
+test("a reset grant dropping the cached account bars also drops its advisory windows, and only that account's", async () => {
+  const id = await anthropicAccount();
+  const generation = credentialGeneration(getAccountCredential("anthropic", id)!);
+  publishAnthropicDecisionQuota(id, generation, { weeklyPercent: 95, updatedAt: now });
+  expect(readLoadedDecisionQuotaPool("anthropic")?.[0]?.windows).toHaveLength(1);
+  forgetCachedProviderAccountQuota("anthropic", "some-other-account");
+  expect(readLoadedDecisionQuotaPool("anthropic")?.[0]?.windows).toHaveLength(1);
+  forgetCachedProviderAccountQuota("anthropic", id);
+  expect(readLoadedDecisionQuotaPool("anthropic")?.[0]).toMatchObject({ id, usable: true });
+  expect(readLoadedDecisionQuotaPool("anthropic")?.[0]?.windows).toBeUndefined();
+});
+
+test("an observe-only quiet key read also retires key evidence published under a replaced secret", () => {
+  const provider = { adapter: "openai-chat" as const, baseUrl: "https://fixture.invalid/v1", apiKey: "$JEV_FIXTURE_QUIET_KEY" };
+  const old = process.env.JEV_FIXTURE_QUIET_KEY;
+  try {
+    process.env.JEV_FIXTURE_QUIET_KEY = "fixture-one";
+    expect(resolveProviderApiKeyQuietly(provider.apiKey)).toBe("fixture-one");
+    publishDecisionKeyQuota("fixture", provider, [{ window: "weekly", percent: 90, observedAt: now }]);
+    expect(readLoadedDecisionKeyQuota("fixture", provider)?.[0]?.percent).toBe(90);
+    process.env.JEV_FIXTURE_QUIET_KEY = "fixture-two";
+    expect(readLoadedDecisionKeyQuota("fixture", provider)?.[0]?.percent).toBe(90);
+    resolveProviderApiKeyQuietly(provider.apiKey);
+    expect(readLoadedDecisionKeyQuota("fixture", provider)).toBeUndefined();
+  } finally { if (old === undefined) delete process.env.JEV_FIXTURE_QUIET_KEY; else process.env.JEV_FIXTURE_QUIET_KEY = old; invalidateResolvedProviderKeyCache(); }
 });

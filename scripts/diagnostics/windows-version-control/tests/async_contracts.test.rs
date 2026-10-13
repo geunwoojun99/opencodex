@@ -1,6 +1,59 @@
 use serde_json::Value;
 use std::{env, fs, path::PathBuf, process::Command};
 
+#[path = "../src/fixture_env.rs"]
+mod fixture_env;
+
+#[test]
+fn eager_eof_releases_upstream_abort_listeners_and_reader() {
+    let result = contract(
+        "eager-eof-listeners",
+        r#"
+const {relaySseEagerBounded}=await import(pathToFileURL(join(process.env.CONTRACT_REPO,'src/server/relay-eager.ts')).href);
+const {getEventListeners}=await import('node:events');
+const upstream=new AbortController();
+const payload='data: '+JSON.stringify({type:'response.output_text.delta',delta:'x'.repeat(1024*1024)})+'\n\n'+'data: {"type":"response.completed"}\n\n';
+const server=Bun.serve({hostname:'127.0.0.1',port:0,fetch(){return new Response(payload,{headers:{'content-type':'text/event-stream'}})}});
+const baseline=getEventListeners(upstream.signal,'abort').length;
+let readerRef, readers=0, doneCalls=0;
+try {
+ async function exchange() {
+  const source=await fetch('http://127.0.0.1:'+server.port,{signal:upstream.signal});
+  const body=source.body;
+  const original=body.getReader;
+  body.getReader=function(...args){const reader=original.apply(this,args);readers++;readerRef=new WeakRef(reader);return reader};
+  let finish;
+  const done=new Promise(resolve=>{finish=resolve});
+  const stream=relaySseEagerBounded(body,upstream,{inspectChunk(){},finishInspection(){},sawTerminal(){return true},onSynthetic(){throw Error('unexpected synthetic terminal')},onClientCancel(){throw Error('unexpected cancellation')},onDone(){doneCalls++;finish()}});
+  const bytes=await new Response(stream).text();
+  await done;
+  const events=bytes.split(/\r?\n/).filter(line=>line.startsWith('data: ')&&line!=='data: [DONE]').map(line=>JSON.parse(line.slice(6)));
+  return events.find(event=>event.type==='response.output_text.delta')?.delta==='x'.repeat(1024*1024)&&events.some(event=>event.type==='response.completed');
+ }
+ const bytesPreserved=await exchange();
+ // End the WeakRef keep-alive job before collecting; the controller intentionally remains live.
+ for(let i=0;i<3;i++){await new Promise(resolve=>setTimeout(resolve,0));Bun.gc(true)}
+ return {baseline,remainingListeners:getEventListeners(upstream.signal,'abort').length,readerCollected:readerRef.deref()===undefined,readers,doneCalls,bytesPreserved,upstreamAborted:upstream.signal.aborted};
+} finally {upstream.abort();await server.stop(true)}
+"#,
+    );
+    assert_eq!(
+        result["readers"], 1,
+        "the actual native response reader must be observed"
+    );
+    assert_eq!(result["doneCalls"], 1);
+    assert_eq!(result["upstreamAborted"], false);
+    assert_eq!(
+        result["remainingListeners"], result["baseline"],
+        "completed relay retained upstream abort listeners: {result}"
+    );
+    assert_eq!(result["bytesPreserved"], true);
+    assert_eq!(
+        result["readerCollected"], true,
+        "a live controller retained the completed native response reader"
+    );
+}
+
 #[test]
 fn aborted_unread_responses_release_owned_budgets_before_cancel_settles() {
     let result = contract(
@@ -201,6 +254,7 @@ console.log('@@catalog-contract@@'+JSON.stringify(answer));
         );
         let mut command = hidden(Command::new(bun));
         command.env_clear();
+        fixture_env::arm_test_home_guard(&mut command, &root.join("original-home")).unwrap();
         if let Some(system) = env::var_os("SystemRoot") {
             command.env("SystemRoot", &system).env("WINDIR", &system);
         }
@@ -574,4 +628,39 @@ return answers;
         }
         assert_eq!(answer["reaped"], true);
     }
+}
+
+#[test]
+fn home_guard_survives_fixture_home_replacement() {
+    let result = contract(
+        "home-guard",
+        r#"
+const guard = await import(pathToFileURL(join(process.env.CONTRACT_REPO, 'src/lib/test-home-guard.ts')).href);
+const original = process.env.OCX_REAL_HOME;
+let homeRefused = false, codexRefused = false;
+try { guard.assertNotRealHomeUnderTest(join(original, '.opencodex')); } catch { homeRefused = true; }
+try { guard.assertNotRealCodexHomeUnderTest(join(original, '.codex')); } catch { codexRefused = true; }
+guard.assertNotRealHomeUnderTest(root);
+guard.assertNotRealCodexHomeUnderTest(root);
+return {
+  armed: process.env.OCX_TEST_HOME_GUARD === '1',
+  rewritten: process.env.HOME !== original && process.env.USERPROFILE !== original,
+  homeRefused, codexRefused, fixtureAllowed: true
+};
+"#,
+    );
+    assert_eq!(result["armed"], true);
+    assert_eq!(result["rewritten"], true);
+    assert_eq!(result["homeRefused"], true);
+    assert_eq!(result["codexRefused"], true);
+    assert_eq!(result["fixtureAllowed"], true);
+}
+
+#[test]
+fn home_guard_requires_an_absolute_protected_home() {
+    let mut command = Command::new("unused-fixture");
+    let error =
+        fixture_env::arm_test_home_guard(&mut command, std::path::Path::new("relative-home"))
+            .unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
 }

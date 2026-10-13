@@ -117,7 +117,8 @@ main usability observations exclude unusable rows. Reserve without its own bars 
 Credits, API, USD, Spark and unscoped display bars never contribute. Sole-key reports reuse each
 producer's existing 0-100 normalized bars (the provider quota guard's inputs); Anthropic/Codex raw
 observations outside 0-100 are ignored rather than clamped. Sole-key evidence is dropped when the
-ordinary key resolver next observes a changed credential; advisory quota evidence reads never resolve keys.
+ordinary key resolver next observes a changed credential, including its observe-only quiet variant; advisory quota evidence reads never resolve keys.
+An Anthropic reset grant that drops one account's cached quota row also drops that account's published advisory windows (the roster row stays), so a failed reread leaves it unknown rather than ranked from the pre-reset window.
 
 `src/combos/jev-quota-route.ts` enriches only opted-in candidates. Authorization precedes
 service evidence reads. TypeSafe criteria carry scalar quota fields, System One/model descriptions
