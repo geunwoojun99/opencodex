@@ -137,6 +137,13 @@ export interface HandleResponsesOptions {
    * it. Omitted means a genuine Responses inbound.
    */
   inboundWire?: InboundWire;
+  /**
+   * Set by a translating ingress (Chat / Anthropic) when the client sent an explicit empty
+   * tool catalog. Those wires may defer tool delivery, so their translated body carries no
+   * readable catalog boundary; an explicit `[]` is still a deny-all declaration and the
+   * undeclared-tool guard enforces it. Absent catalogs and partial catalogs stay deferred.
+   */
+  clientDeclaredEmptyToolCatalog?: boolean;
   nativeReasoningReplay?: ReadonlyMap<string, string>;
   nativeReasoningMint?: { owner?: NativeReasoningOwner };
   /** Droid's per-request effort default; each concrete combo or policy target applies it only if its ladder allows it. */
@@ -202,6 +209,15 @@ export interface HandleResponsesOptions {
    * rebuilds headers and carries the fact through this flag.
    */
   visionDescribeTerminal?: boolean;
+  /**
+   * Terminal advisor marker: true when the inbound request IS the advisor sidecar's own loopback
+   * consultation. The advisor planner then never plans a consultation — a depth cap of 1 that
+   * keeps Worker → Advisor → Advisor recursion impossible (same structure as
+   * {@linkcode visionDescribeTerminal}). The Chat surface detects the raw
+   * `x-opencodex-advisor-internal` header before its bridge rebuilds headers and carries the
+   * fact through this flag.
+   */
+  advisorInternal?: boolean;
   /**
    * Set only by the Chat and Messages ingresses when `protocols.rollout.directEncoders` is on and
    * the settled route is one non-Responses target. Adapter delivery then encodes the adapter

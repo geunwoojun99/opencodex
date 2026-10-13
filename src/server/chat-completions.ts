@@ -19,7 +19,8 @@ import {
   responsesJsonToChatCompletion,
   responsesSseToChatCompletionsSse,
 } from "../chat/outbound";
-import { classifyError, cyberPolicyErrorType, CYBER_POLICY_ERROR_CODE, isCyberPolicyCode } from "../lib/errors";
+import { ADVISOR_INTERNAL_CAPABILITY_HEADER, isInternalCallCapability } from "../lib/local-internal-call-capability";
+import { classifyError, cyberPolicyErrorType, CYBER_POLICY_ERROR_CODE, isCyberPolicyCode, UNDECLARED_TOOL_CALL_ERROR_CODE } from "../lib/errors";
 import { redactSecretString } from "../lib/redact";
 import { resolveClientRetryAfter } from "../lib/retry-after";
 import {
@@ -370,6 +371,17 @@ async function handleChatCompletionsWithBudget(
   }
 
   const visionDescribeTerminal = req.headers.get("x-opencodex-vision-describe") === "1";
+  // Terminal advisor marker: the advisor sidecar's own loopback consultation re-enters through
+  // this surface. The bridge rebuilds headers from the FORWARD_HEADERS allowlist, which would
+  // drop the raw marker header — so the fact is detected here and carried as an option flag
+  // (same structure as the vision-describe fence above, depth cap 1).
+  //
+  // The header value is NOT evidence by itself: any external caller can send it, and the peer
+  // address proves nothing (Docker/WSL/tunnels/port-forwarding end on loopback). Internal
+  // authority comes from a process-owned capability minted at random per process and compared in
+  // constant time, so a forged header — or a token captured from an older process — is treated
+  // as an ordinary external request.
+  const advisorInternal = isInternalCallCapability(req.headers.get(ADVISOR_INTERNAL_CAPABILITY_HEADER));
   // Concrete helper targets must fail before optional stored-main credential enrichment.
   // Unresolved combos are checked after their concrete child route is selected in Responses.
   if (settledRoute && !settledRoute.combo && isCanonicalOpenAiForwardProvider(settledRoute.provider)
@@ -455,6 +467,10 @@ async function handleChatCompletionsWithBudget(
     abortSignal: req.signal,
     // Body is Responses-shaped by now, but the client spoke Chat Completions.
     inboundWire: "chat",
+    // A Chat caller may send an explicit empty `tools` array — a deny-all declaration the
+    // translation drops along with the whole catalog. Carried separately so the
+    // undeclared-tool guard can still enforce it; absent/partial catalogs stay deferred.
+    clientDeclaredEmptyToolCatalog: Array.isArray(chatBody.tools) && chatBody.tools.length === 0,
     ...((settledRoute?.combo || settledRoute?.routeKind === "policy") && droidDefaultEffort
       ? { droidDefaultEffort }
       : {}),
@@ -468,6 +484,7 @@ async function handleChatCompletionsWithBudget(
     // headers from the FORWARD_HEADERS allowlist, which would drop the raw
     // header — so the fact is detected here and carried as an option flag.
     ...(visionDescribeTerminal ? { visionDescribeTerminal: true } : {}),
+    ...(advisorInternal ? { advisorInternal: true } : {}),
     translatorBudget,
     ...(logIds ? { onFirstOutput: () => recordFirstOutput(logCtx, logIds.start) } : {}),
     onNativePassthroughTerminal: status => finalizeNativeLog(httpStatusForRequestLogTerminal(status, logCtx), { terminalStatus: status, closeReason: "terminal" }),
@@ -543,6 +560,10 @@ async function handleChatCompletionsWithBudget(
       // Structured model_not_found must win over classifyError's generic remaps.
       classified.code = "model_not_found";
       classified.type = "invalid_request_error";
+    } else if (upstreamCode === UNDECLARED_TOOL_CALL_ERROR_CODE) {
+      // The guard's deterministic refusal keeps its wire identity — same code the
+      // streamed `response.failed` frame and the Anthropic surface carry.
+      classified.code = UNDECLARED_TOOL_CALL_ERROR_CODE;
     } else if (upstreamCode !== undefined && upstreamCode !== null && classified.code == null) {
       classified.code = upstreamCode;
     }
