@@ -131,6 +131,7 @@ export const INTEGRATION_TAB_HASHES = [
   "integrations/cursor",
   "integrations/opencode",
   "integrations/pi",
+  "integrations/gentle-shell",
   "integrations/omp",
   "integrations/hermes",
   "integrations/openclaw",
@@ -147,6 +148,7 @@ export const INTEGRATION_TAB_HASHES = [
   "integrations/cline",
   "integrations/kilo",
   "integrations/droid",
+  "integrations/qoder",
 ] as const;
 
 /**

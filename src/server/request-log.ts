@@ -96,12 +96,19 @@ import type {
 
 const CACHE_DIAGNOSTIC_HOOK = Symbol.for("opencodex.cache-diagnostic.v1");
 interface CacheDiagnosticHooks {
+  /** Whether inbound bodies are actually recorded; the hook is registered at import either way. */
+  enabled(): boolean;
   observeInbound(body: unknown, headers: Headers, source: PromptCacheKeySource): CacheDiagnosticDraft;
   rebind(body: unknown, draft: CacheDiagnosticDraft | undefined): void;
   finalize(facts: CacheDiagnosticFinalFacts): void;
 }
 function cacheDiagnosticHooks(): CacheDiagnosticHooks | undefined {
   return (globalThis as Record<symbol, CacheDiagnosticHooks | undefined>)[CACHE_DIAGNOSTIC_HOOK];
+}
+
+/** Whether the cache diagnostic recorder will record inbound bodies (`OPENCODEX_CACHE_DEBUG=1`). */
+export function cacheDiagnosticsObserving(): boolean {
+  return cacheDiagnosticHooks()?.enabled() === true;
 }
 
 export interface RequestLogContext extends UpstreamErrorDiagnostics {
@@ -1426,7 +1433,12 @@ export function addFinalRequestLog(
     ...(attempt.deliverySummary ? { deliverySummary: { ...attempt.deliverySummary } } : {}),
   }));
   const isCombo = logCtx.comboId !== undefined && (attempts?.length ?? 0) > 0;
-  const aggregate = isCombo ? aggregateAttemptUsage(attempts ?? []) : null;
+  // A key or account rotation splits the attempt and clears `logCtx.usage`, so a multi-attempt
+  // request totals from its attempts, combo or not. One attempt keeps the request-level usage
+  // (and its input estimate); a locally answered row sent nothing and keeps its own.
+  const aggregate = isCombo || ((attempts?.length ?? 0) > 1 && logCtx.localTerminalReason === undefined)
+    ? aggregateAttemptUsage(attempts ?? [])
+    : null;
   const loggedUsage = aggregate?.usage ?? existing.usage;
   const usageStatus = aggregate?.status ?? existing.status;
   const totalTokens = aggregate?.totalTokens ?? existing.totalTokens;

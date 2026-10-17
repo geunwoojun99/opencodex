@@ -25,6 +25,7 @@ import {
   websocketsEnabled,
 } from "../config";
 import { flushConfigDirHardeningAndReaps } from "../config/paths";
+import { trackBackgroundWork } from "../lib/background-work";
 import { migrateStartupSubagentModels } from "./subagent-models-startup";
 import { migrateStartupXaiResponses } from "./xai-responses-startup";
 import { migrateStartupZaiResponses } from "./zai-responses-startup";
@@ -266,17 +267,17 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
     startupOwnershipHomes = homes;
     startupOwnershipStatePaths = statePaths;
   } catch { /* inspection below stays unknown */ }
-  const startupCacheOwnership = inspectStartupOwnership(
+  const startupCacheOwnership = shouldSyncCodexOnStart(config) ? inspectStartupOwnership(
     deps,
     startupOwnershipHomes,
     startupOwnershipStatePaths,
     startupWindowsTaskListingCache,
-  );
+  ) : null;
   // Startup cache invalidation is best-effort and applies only when startup sync is enabled.
   // Check OFF before taking K: on Windows K resolves SID + LocalAppData through PowerShell,
   // and run 35093667426 exceeded healthy controls by 33.8 s against that 30 s child budget.
   // The permit callback still re-reads intent under K to close a concurrent disable race.
-  if (shouldSyncCodexOnStart(config) && startupCacheOwnership.ownership === "owned" && startupOwnershipHomes !== null) {
+  if (startupCacheOwnership?.ownership === "owned" && startupOwnershipHomes !== null) {
     try {
       const startupCodexHome = startupOwnershipHomes.codexHome;
       // #1046: record whether this actually rewrote the cache. `handleStart` ORs this
@@ -548,12 +549,12 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
   // clients; no Codex request can use this lifecycle in that state.
   // Re-probe here instead of trusting the earlier cache decision: startup work
   // between the two sites must not widen the service-install race.
-  const nativeOwnership = inspectStartupOwnership(
+  const nativeOwnership = shouldSyncCodexOnStart(config) ? inspectStartupOwnership(
     deps,
     startupOwnershipHomes,
     startupOwnershipStatePaths,
-  );
-  const preparedNativeMainLifecycle = nativeOwnership.ownership !== "foreign"
+  ) : null;
+  const preparedNativeMainLifecycle = nativeOwnership !== null && nativeOwnership.ownership !== "foreign"
     && startupOwnershipHomes !== null
     ? prepareNativeMainStartupLifecycle(
       deps.nativeMainStartup,
@@ -599,7 +600,7 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
       return retryPreparedNativeMainLifecycle.start();
     },
   };
-  const nativeMainLifecycle: NativeMainStartupLifecycle = shouldSyncCodexOnStart(config)
+  const nativeMainLifecycle: NativeMainStartupLifecycle = nativeOwnership !== null
     ? nativeOwnership.ownership === "owned"
       ? preparedNativeMainLifecycle
         ? preparedNativeMainLifecycle.start()
@@ -737,7 +738,7 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
         throw new AuxiliaryListenerBindError("hub.managementIngress", managementIngressPort, "127.0.0.1", error);
       }
     }
-    optionalListeners.start({ config, publicPort: server.port ?? listenPort, requestedPort: listenPort,
+    optionalListeners.start({ config, publicPort: server.port ?? listenPort, requestedPort: listenPort, startProxy: deps.startClaudeInterceptProxy,
       maxRequestBodySize: inboundBodyLimitBytes, dispatch: (req, requestServer) => serveOptions.fetch(req, requestServer) });
   } catch (error) {
     unregisterQuotaAutoRefresh?.();
@@ -843,7 +844,7 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
     && isCanonicalOpenAiForwardProvider(openAiProvider)
     && providerCodexAccountMode("openai", openAiProvider) === "pool"
   ) {
-    import("../codex/plan-from-token")
+    void trackBackgroundWork("codex-pool-quota-prime-startup", import("../codex/plan-from-token")
       .then(({ reconcileCodexPlansFromTokens }) => {
         try {
           reconcileCodexPlansFromTokens(config);
@@ -853,7 +854,7 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
         return import("../codex/auth-api");
       })
       .then(({ primeCodexPoolQuotas }) => primeCodexPoolQuotas(config, "startup"))
-      .catch(() => {});
+      .catch(() => {}));
   }
 
   // Opt-in storage policy (default OFF). Never blocks listen; cancellable on shutdown.

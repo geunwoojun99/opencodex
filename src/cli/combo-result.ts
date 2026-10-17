@@ -39,7 +39,7 @@ function publicCombo(value: unknown): Record<string, unknown> {
       if (!tiers) invalid();
       result[key] = tiers;
       continue;
-    } else if (key === "nativeAlias" || key === "decisionQuotaSignals") {
+    } else if (key === "nativeAlias" || key === "allowMeteredTargets" || key === "decisionQuotaSignals") {
       if (typeof child !== "boolean") invalid();
     } else invalid();
     result[key] = child;

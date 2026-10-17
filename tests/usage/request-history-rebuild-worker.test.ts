@@ -4,7 +4,7 @@
  * close or a replaced ledger never leaves a partial index or a stray build file.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readdirSync, renameSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { handleManagementAPI } from "../../src/server/management-api";
@@ -288,8 +288,12 @@ describe("request-history worker rebuild (#6990)", () => {
   test("a build whose ledger is not the recorded file fails stale and leaves no file", () => {
     writeLedger(ledgerLines(10));
     const revision = currentUsageLogRevision()!;
+    // NTFS file ids exceed 2^53, where a Number cannot tell id and id + 1 apart (#7070 on
+    // Windows). The revision must carry the id exactly, and the neighbour must be rejected.
+    const exact = statSync(usageLogPath(), { bigint: true });
+    expect([revision.dev, revision.ino]).toEqual([exact.dev.toString(), exact.ino.toString()]);
     const buildPath = buildFilePath(join(testDir, "unit.sqlite"), process.pid, 1);
-    expect(() => buildIndexFile(buildPath, "test", { ...revision, ino: revision.ino + 1 }))
+    expect(() => buildIndexFile(buildPath, "test", { ...revision, ino: (BigInt(revision.ino) + 1n).toString() }))
       .toThrow(RequestHistoryIndexStaleError);
     expect(readdirSync(testDir).filter(name => name.startsWith("unit.sqlite"))).toEqual([]);
   });

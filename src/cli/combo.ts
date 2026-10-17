@@ -24,7 +24,7 @@ const USAGE = `Usage:
       [--strategy <failover|round-robin|random|least-used|reset-window|jev>] [--sticky <1-100|->]
       [--effort <low|medium|high|xhigh|max|ultra|->] [--effort-mode <fallback|force|->]
       (force overrides valid client effort and can increase cost/latency) [--alias <name|->]
-      [--native-alias [on|off]] [--display-name <label|->]
+      [--native-alias [on|off]] [--allow-metered-targets <on|off>] [--display-name <label|->]
       [--image-input <auto|disabled>] [--reasoning-effort-mode <strict|adaptive>]
       [--decision-provider <provider|-> | --decision-model <route|->] [--decision-timeout <ms|->]
       [--decision-quota-signals <on|off|->] [--decision-quota-tiers <JSON|->]
@@ -170,6 +170,7 @@ async function set(argv: string[], deps: RuntimeApiDeps): Promise<number> {
   if (effortMode !== undefined) combo.defaultEffortMode = effortMode === "-" ? "fallback" : effortMode;
   if (alias !== undefined) combo.alias = alias === "-" ? "" : alias;
   if (additional.nativeAlias !== undefined) combo.nativeAlias = additional.nativeAlias;
+  if (additional.allowMeteredTargets !== undefined) combo.allowMeteredTargets = additional.allowMeteredTargets;
   if (additional.imageInput !== undefined) combo.imageInput = additional.imageInput;
   if (additional.reasoningEffortMode !== undefined) combo.reasoningEffortMode = additional.reasoningEffortMode;
   if (displayName !== undefined) combo.displayName = displayName === "-" ? "" : displayName;
