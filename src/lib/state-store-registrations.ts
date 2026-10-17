@@ -10,6 +10,7 @@ import { reconcileModelCacheGeneration } from "../codex/model-cache";
 import { reconcilePoolRotationState } from "../codex/pool-rotation";
 import { reconcileCodexQuotaAccounts } from "../codex/quota";
 import { reconcileQuotaRecovery, sweepExpiredQuotaRecovery } from "../codex/quota-401-recovery";
+import { bindUpstreamRequestCompressionConfig } from "../server/responses/request-compression";
 import {
   listLiveCodexAccountIds,
   reconcileCodexRoutingHealth,
@@ -78,6 +79,9 @@ export function notifyLiveConfigObservers(config: OcxConfig): void {
 
 export function setLiveStateStoreConfig(config: OcxConfig): void {
   liveServerConfig = config;
+  // The one place the server's live config object is installed; detached configs (catalog sync)
+  // never come through here, so the outbound compression opt-in follows the running server only.
+  bindUpstreamRequestCompressionConfig(config);
   notifyLiveConfigObservers(config);
 }
 

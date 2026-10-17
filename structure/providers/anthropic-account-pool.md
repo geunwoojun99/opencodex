@@ -471,3 +471,12 @@ which forwards them to the activation-owned snapshot; otherwise those calls are 
 are separate from display caches and serving-account selection. Request decisions consume only
 loaded evidence; cold or mismatched generations remain unknown. Usability, partial-window clocks
 and late-writer fences follow [loaded advisory quota](jev-decision.md#loaded-advisory-quota). Only the primary `anthropic` pool publishes; `anthropic2` is excluded and stays unknown.
+
+## Permanent refusal auto-pause
+
+The separate `providers.<instance>.accountAutoPause` policy is default off. Physical
+Responses and native Messages sends observe their captured bearer before recovery. Exact
+organization/OAuth or subscription refusals can persist `pauseDetails` with a fixed reason
+and timestamp through `src/oauth/store.ts`. `pauseRevision` changes on resume, so late
+pre-resume responses cannot pause the resumed account. The existing selectors rebuild an
+eligible sibling within their send budgets; proactive-pool activation is not required.

@@ -1113,6 +1113,9 @@ export interface OcxConfig {
   codexAccounts?: CodexAccount[];
   /** Account ids administratively excluded from future pool selection until resumed. */
   pausedCodexAccountIds?: string[];
+  /** Internal policy epochs; null marks malformed disk input and suppresses automatic pause. */
+  accountAutoPausePolicyRevisions?: Record<string, string> | null;
+  codexAccountPauseState?: Record<string, { revision: string; details?: import("./account-auto-pause").AccountPauseDetails }>;
   /**
    * Account ids, `__main__` included, allowed to keep serving from ChatGPT credits once one of
    * their usage windows is full. Every other account is skipped by selection at 100% until its
@@ -1293,6 +1296,13 @@ export interface OcxConfig {
    * that work today — on Azure and custom Responses gateways as well, whose limits are unknown.
    */
   maxUpstreamBodyBytes?: number;
+  /**
+   * Opt-in compression of native ChatGPT Responses HTTP request bodies (#7247): "gzip" or "zstd".
+   * Omitted, "off", or any other value = identity, the default. Applies only at the final HTTP send
+   * to chatgpt.com Codex responses/compact, to string bodies from 1 KiB to 16 MiB; WebSocket turns
+   * and every other destination are unchanged. Compression runs synchronously on the event loop.
+   */
+  upstreamRequestCompression?: "off" | "gzip" | "zstd";
   /**
    * Opt-in ceiling, in bytes, on a decompressed INBOUND data-plane request body (#3573).
    *
@@ -1763,6 +1773,8 @@ export interface CodexLowQuotaProtectionConfig {
   actions: {
     pause: boolean;
     notify: boolean;
+    /** Opt-in: also hand each notice to this host's OS notifier (macOS, Linux). Requires notify. */
+    desktop?: boolean;
   };
   windows: {
     short: boolean;
