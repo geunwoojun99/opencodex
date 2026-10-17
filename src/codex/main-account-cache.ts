@@ -1,4 +1,5 @@
-import { publishDecisionQuotaRoster, withdrawDecisionQuotaRoster } from "../providers/quota-decision-snapshot";
+import { getConfigDir } from "../config/paths";
+import { notifyMainRosterChanged, type MainDecisionRow } from "../lib/decision-quota-sink";
 import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { codexCredentialMutationEpoch } from "./credential-mutation-epoch";
 import type { StoredAccountQuota } from "./quota-types";
@@ -24,6 +25,9 @@ const mainQuotaCredentialKey = randomBytes(32);
 let mainQuotaCredential: { bearerHmac: Buffer; writer: MainQuotaWriter } | undefined;
 let mainQuotaCredentialGeneration = 0;
 let mainDecisionCredentialUsable = true;
+// Config root that owns the observed main identity/credential for advisory decision evidence only.
+// Stamped at identity/credential observations while a sink is active; other transitions never claim a root.
+let mainDecisionRoot: string | undefined;
 /** Existing physical credential owner supplies terminal grant/usability observations. */
 export function observeMainDecisionCredentialUsable(usable: boolean): void {
   mainDecisionCredentialUsable = usable;
@@ -38,7 +42,7 @@ const decisionWriterGenerations = new WeakMap<MainQuotaWriter, number>();
 /** Return the credential generation a main quota writer was captured under, or undefined once that writer is stale or its credential generation has moved. */
 export function mainDecisionQuotaWriterGeneration(writer: MainQuotaWriter): number | undefined {
   const generation = decisionWriterGenerations.get(writer);
-  return generation === mainQuotaCredentialGeneration && isMainQuotaWriterLive(writer) ? generation : undefined;
+  return generation === mainQuotaCredentialGeneration && isMainQuotaWriterLive(writer) && mainDecisionRoot === getConfigDir() ? generation : undefined;
 }
 
 function mainQuotaIdentityKey(accountId: string): string {
@@ -55,7 +59,7 @@ export function observeMainQuotaIdentity(accountId: string): void {
   mainAccountIdentityGeneration += 1;
   mainQuotaCredential = undefined;
   mainQuotaCredentialGeneration += 1;
-  publishMainDecisionRoster();
+  publishMainDecisionRoster(true);
 }
 
 /** Capture a main quota writer for an account id only when it matches the observed physical identity, remembering the credential generation it was captured under. */
@@ -76,7 +80,7 @@ export function observeMainQuotaCredential(accessToken: string, accountId: strin
   if (!mainQuotaCredential || !isMainQuotaWriterLive(mainQuotaCredential.writer)
     || !timingSafeEqual(bearerHmac, mainQuotaCredential.bearerHmac)) mainQuotaCredentialGeneration += 1;
   mainQuotaCredential = { bearerHmac, writer };
-  publishMainDecisionRoster();
+  publishMainDecisionRoster(true);
   const result = { ...writer };
   decisionWriterGenerations.set(result, mainQuotaCredentialGeneration);
   return result;
@@ -191,13 +195,29 @@ export function clearMainAccountCredentialPresence(): void {
   publishMainDecisionRoster();
 }
 
-/** Publish the single `__main__` roster row for advisory decision quota; it is usable only while a credential is observed and present. */
-function publishMainDecisionRoster(): void {
-  try {
-    publishDecisionQuotaRoster("codex-main", [{ id: "__main__", generation: mainQuotaCredentialGeneration,
-      usable: mainDecisionCredentialUsable && cachedMainCredentialPresence !== false && mainQuotaCredential !== undefined }]);
-  } catch {
-    // Advisory evidence must never alter main-credential cache state transitions; on failure the main roster becomes unknown.
-    try { withdrawDecisionQuotaRoster("codex-main"); } catch { /* best-effort */ }
+/**
+ * Build the single `__main__` decision row from in-memory fields, or undefined (unknown) when the
+ * observed credential is not owned by the current config root. A mismatch also forgets the claimed
+ * root, so returning to the old root never resurrects its row without a new owned observation.
+ */
+function mainDecisionRow(): MainDecisionRow | undefined {
+  if (mainDecisionRoot === undefined || mainDecisionRoot !== getConfigDir()) {
+    mainDecisionRoot = undefined;
+    return undefined;
   }
+  return { generation: mainQuotaCredentialGeneration,
+    usable: mainDecisionCredentialUsable && cachedMainCredentialPresence !== false && mainQuotaCredential !== undefined };
+}
+
+/** Hand the main decision row to the opt-in decision-quota slot (a no-op unless JEV quota signals are active); identity/credential observations claim the current root. */
+function publishMainDecisionRoster(claimsRoot = false): void {
+  notifyMainRosterChanged(() => {
+    if (claimsRoot) mainDecisionRoot = getConfigDir();
+    return mainDecisionRow();
+  });
+}
+
+/** Activation replay for the JEV quota owner: the current row, or undefined when the observed credential belongs to another config root. */
+export function peekMainDecisionRow(): MainDecisionRow | undefined {
+  return mainDecisionRow();
 }

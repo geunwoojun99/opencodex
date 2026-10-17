@@ -238,7 +238,9 @@ moderate tier unless you set it explicitly (for example, `moderate: 40`). Partia
 with those defaults, then all thresholds must be finite, within 0–100 and strictly ascending.
 
 Evidence comes only from memory snapshots published by existing quota collectors, accepted
-response headers and credential/account owners. Reading advisory quota evidence never resolves
+response headers and credential/account owners, and only while at least one JEV Combo has this
+switch on: until then opencodex collects nothing for it, so evidence starts accumulating (and reads
+as unknown) from the moment you enable it. Reading advisory quota evidence never resolves
 credentials, loads auth stores or quota files, reads a keychain, probes upstream, or starts a
 refresher. Normal decision-backend credential resolution is unchanged. Cold, missing, stale (over
 30 minutes), future, invalid or reset-expired evidence is unknown. Each account uses its worst valid

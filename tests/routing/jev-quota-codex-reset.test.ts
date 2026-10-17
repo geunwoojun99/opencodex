@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
+import { activateJevQuotaEvidence, deactivateJevQuotaEvidence } from "../helpers/jev-quota-activation";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { fetchMainAccountInfoAttempt } from "../../src/codex/auth-api/main-account-probe";
 import { reconcileMainCodexAccountRuntimeState, resetMainCodexAccountIdentityTrackingForTests } from "../../src/codex/account-lifecycle";
@@ -21,12 +22,12 @@ beforeEach(() => {
   // would be discarded as stale. A complete reconciliation realigns both without touching registrations.
   reconcileStateGeneration({ generation: 0, providerNames: new Set(), comboIds: new Set(), comboTargets: new Set(),
     codexAccountIds: new Set(), oauthAccountKeys: new Set(), configRoots: new Set() });
-  home = createTempHome("ocx-jq-reset-");
+  home = createTempHome("ocx-jq-reset-"); activateJevQuotaEvidence();
   clock = spyOn(Date, "now").mockReturnValue(now);
   clearAccountQuota();
   clearMainAccountInfoCache();
 });
-afterEach(() => { clearAccountQuota(); resetMainCodexAccountIdentityTrackingForTests(); clock.mockRestore(); home.remove(); });
+afterEach(() => { deactivateJevQuotaEvidence(); clearAccountQuota(); resetMainCodexAccountIdentityTrackingForTests(); clock.mockRestore(); home.remove(); });
 /** Capture a live main quota writer for the fixture identity and credential. */
 function mainWriter() {
   observeMainQuotaIdentity("fixture-main");

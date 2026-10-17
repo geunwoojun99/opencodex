@@ -2,7 +2,8 @@ import { anthropicModelFamily } from "../oauth/anthropic-model-family";
 /** Advisory quota only: loaded snapshots, never serving-account selection or hard eligibility. */
 import { resolveAnthropicModelRoute, routeCandidates } from "../oauth/anthropic-model-routes";
 import type { OcxConfig } from "../types";
-import { readLoadedDecisionKeyQuota, readLoadedDecisionQuotaPool, type DecisionQuotaWindow } from "../providers/quota-decision-snapshot";
+import type { DecisionQuotaWindow } from "../providers/quota-decision-snapshot";
+import { readLoadedDecisionKeyQuota, readLoadedDecisionQuotaPool } from "../lib/decision-quota-sink";
 import { isCanonicalOpenAiForwardProvider } from "../providers/openai-tiers-destination";
 import { providerCodexAccountMode } from "../providers/registry";
 import { NATIVE_RESERVE_MODEL } from "../codex/catalog/native-models";

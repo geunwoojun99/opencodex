@@ -1,5 +1,5 @@
 import { bindRawCodexDecisionResets, publishCodexDecisionQuota } from "../providers/quota-decision-publication";
-import { clearDecisionAccountQuotas } from "../providers/quota-decision-snapshot";
+import { clearDecisionAccountQuotas, decisionQuotaSinkActive } from "../lib/decision-quota-sink";
 import { parseCodexCredits } from "./credits";
 import { forgetMainAccountUsage, observeMainAccountUsage, type FreshWindow } from "./main-account-external-usage";
 import { closeSync, constants as fsConstants, existsSync, fstatSync, openSync, readSync, unlinkSync } from "node:fs";
@@ -620,7 +620,7 @@ export function parseUpstreamQuotaHeaders(headers: Headers, options?: { modelId?
     if (tertiaryResetAt !== undefined) quota.monthlyResetAt = tertiaryResetAt;
   }
 
-  bindRawCodexDecisionResets(quota, {
+  if (decisionQuotaSinkActive()) bindRawCodexDecisionResets(quota, {
     short: primaryResetRaw,
     weekly: primaryIsMonthly || primaryIsShort || primaryPercent === undefined ? secondaryResetRaw : primaryResetRaw,
     monthly: primaryIsMonthly && primaryPercent !== undefined ? primaryResetRaw : tertiaryResetRaw,
@@ -1028,7 +1028,7 @@ export function parseUsageQuota(data: WhamUsageResponse): Omit<StoredAccountQuot
 
   if (resetCredits !== undefined) quota.resetCredits = resetCredits;
 
-  bindRawCodexDecisionResets(quota, {
+  if (decisionQuotaSinkActive()) bindRawCodexDecisionResets(quota, {
     short: primaryWindow?.reset_at,
     weekly: primaryIsMonthly || weeklyCandidatePercent === undefined ? secondaryWindow?.reset_at : primaryWindow?.reset_at,
     monthly: primaryIsMonthly && primaryPercent !== undefined ? primaryWindow?.reset_at : tertiaryWindow?.reset_at,

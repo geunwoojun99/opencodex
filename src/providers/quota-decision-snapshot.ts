@@ -1,4 +1,4 @@
-/** Loaded-only advisory evidence. No auth, disk, keychain, selectors, timers or probes. */
+/** Loaded-only advisory evidence. No auth, disk, keychain, selectors, timers or probes. Imported only by src/combos/jev-quota-activation.ts; core producers reach it through src/lib/decision-quota-sink.ts while activation is registered. */
 import { createHash } from "node:crypto";
 import { getConfigDir } from "../config/paths";
 import { captureConfigGeneration } from "../lib/state-store-sweeper";
@@ -24,9 +24,13 @@ const POOL_PROVIDERS = new Set(["anthropic", "codex", "codex-main"]);
 const MAX_ROWS = 1024;
 const MAX_WINDOWS = 64;
 let keyEpoch = 0;
+let writesForTests = 0;
+/** Test-only: count of write entry calls, so signals-off tests can assert that nothing reached the snapshot. */
+export function decisionQuotaSnapshotWriteCountForTests(): number { return writesForTests; }
 const credentialVersions = new Map<string, string>();
 /** Credential owner calls this after its normal read; JEV never invokes that owner. */
 export function observeDecisionKeyCredential(reference: string, resolved: string | undefined): void {
+  writesForTests++;
   const version = createHash("sha256").update(resolved ?? "").digest("hex");
   const referenceId = createHash("sha256").update(reference).digest("hex");
   const previous = credentialVersions.get(referenceId);
@@ -53,6 +57,7 @@ function keyPolicy(provider: OcxProviderConfig): string {
 export function invalidateDecisionKeyQuotas(): void { keyEpoch++; keys.clear(); }
 /** Publish decision windows for a single-key provider; pooled, disabled or non-key providers are never published, and the table is bounded. */
 export function publishDecisionKeyQuota(name: string, provider: OcxProviderConfig, windows: readonly DecisionQuotaWindow[]): void {
+  writesForTests++;
   if (name.length > 1024 || provider.disabled || (provider.authMode ?? "key") !== "key" || (provider.apiKeyPool?.length ?? 0) > 1) return;
   if (keys.size >= 256 && !keys.has(name)) keys.delete(keys.keys().next().value!);
   keys.set(name, { root: getConfigDir(), epoch: keyEpoch, configGeneration: captureConfigGeneration(), policy: keyPolicy(provider), windows: copyWindows(windows) });
@@ -67,6 +72,7 @@ export function readLoadedDecisionKeyQuota(name: string, provider: OcxProviderCo
 }
 /** Replace a pool provider's roster; an oversized pool makes the whole pool unknown rather than hiding usable rows. */
 export function publishDecisionQuotaRoster(provider: string, rows: readonly DecisionQuotaAccount[]): void {
+  writesForTests++;
   if (!POOL_PROVIDERS.has(provider)) return;
   const old = rosters.get(provider);
   if (old?.root !== getConfigDir()) {
@@ -98,6 +104,7 @@ export function withdrawDecisionQuotaRoster(provider: string): void {
 }
 /** Publish windows for a roster account at the matching credential generation; a partial observation retains other windows of the same generation. */
 export function publishDecisionAccountQuota(provider: string, id: string, generation: string | number, windows: readonly DecisionQuotaWindow[], partial = false): void {
+  writesForTests++;
   const roster = rosters.get(provider);
   if (roster?.root !== getConfigDir() || !roster.accounts.some(row => row.id === id && row.generation === generation)) return;
   const key = accountKey(provider, id);
@@ -117,6 +124,7 @@ export function readLoadedDecisionQuotaPool(provider: string): readonly { id: st
 }
 /** Mark a roster account usable or unusable, optionally scoped to one credential generation so an unrelated generation is left intact. */
 export function setDecisionAccountUsable(provider: string, id: string, usable: boolean, generation?: string | number): void {
+  writesForTests++;
   const roster = rosters.get(provider);
   if (roster?.root !== getConfigDir()) return;
   const row = roster.accounts.find(row => row.id === id && (generation === undefined || generation === row.generation));

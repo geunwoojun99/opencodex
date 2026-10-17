@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
+import { activateJevQuotaEvidence, deactivateJevQuotaEvidence } from "../helpers/jev-quota-activation";
 import { publishDecisionAccountQuota, publishDecisionQuotaRoster, readLoadedDecisionQuotaPool, publishDecisionKeyQuota, readLoadedDecisionKeyQuota, invalidateDecisionKeyQuotas, setDecisionAccountUsable } from "../../src/providers/quota-decision-snapshot";
-import { publishAnthropicDecisionQuota, publishCodexDecisionQuota } from "../../src/providers/quota-decision-publication";
+import { bindRawDecisionWindows, bindRawCodexDecisionResets, publishAnthropicDecisionQuota, publishCodexDecisionQuota } from "../../src/providers/quota-decision-publication";
 import { observeMainDecisionCredentialUsable, clearMainAccountInfoCache, observeMainQuotaIdentity, observeMainQuotaCredential, mainDecisionQuotaWriterGeneration, setMainAccountCredentialPresence } from "../../src/codex/main-account-cache";
 import { saveCodexAccountCredential, capturePoolQuotaWriter, removeCodexAccountCredential } from "../../src/codex/account-store";
-import { applyAccountQuotaFromUpstreamHeaders, setAccountQuotaFromParsed } from "../../src/codex/quota";
+import { applyAccountQuotaFromUpstreamHeaders, parseUsageQuota, setAccountQuotaFromParsed } from "../../src/codex/quota";
 import { saveCredential, getAccountSet, getAccountCredential, credentialGeneration, saveAccountCredential, setAccountPaused, markAccountNeedsReauth, removeAccount } from "../../src/oauth/store";
 import { probeAnthropicQuotaWithRecovery, setAnthropicQuotaAfterSettlementForTests } from "../../src/providers/quota/anthropic-cooldown-recovery";
 import { rawAnthropicUsageWindows, rawAnthropicHeaderWindows } from "../../src/providers/quota/anthropic-decision-windows";
@@ -14,13 +15,14 @@ import { keyReport, publishCollectedDecisionQuota } from "../../src/providers/qu
 import { parseOllamaCloudBalance } from "../../src/providers/quota";
 import { resolveProviderApiKey, resolveProviderApiKeyQuietly, invalidateResolvedProviderKeyCache } from "../../src/providers/api-key-resolve";
 import { createTempHome, type TempHome } from "../helpers/temp-home";
+import type { StoredAccountQuota } from "../../src/codex/quota-types";
 import type { OcxConfig } from "../../src/types";
 
 let home: TempHome;
 const now = 2_000_000_000_000;
 let clock: ReturnType<typeof spyOn>;
-beforeEach(() => { home = createTempHome("ocx-jq-pub-"); clock = spyOn(Date, "now").mockReturnValue(now); clearMainAccountInfoCache(); invalidateDecisionKeyQuotas(); publishDecisionQuotaRoster("anthropic", []); publishDecisionQuotaRoster("codex", []); });
-afterEach(() => { setAnthropicQuotaAfterSettlementForTests(undefined); clock.mockRestore(); invalidateDecisionKeyQuotas(); home.remove(); });
+beforeEach(() => { home = createTempHome("ocx-jq-pub-"); activateJevQuotaEvidence(); clock = spyOn(Date, "now").mockReturnValue(now); clearMainAccountInfoCache(); invalidateDecisionKeyQuotas(); publishDecisionQuotaRoster("anthropic", []); publishDecisionQuotaRoster("codex", []); });
+afterEach(() => { deactivateJevQuotaEvidence(); setAnthropicQuotaAfterSettlementForTests(undefined); clock.mockRestore(); invalidateDecisionKeyQuotas(); home.remove(); });
 const credential = { access: "fixture-access", refresh: "fixture-refresh", expires: now + 3_600_000 };
 /** Save a fixture Anthropic credential and return its account id. */
 async function anthropicAccount(): Promise<string> {
@@ -28,10 +30,22 @@ async function anthropicAccount(): Promise<string> {
   return getAccountSet("anthropic")!.accounts[0]!.id;
 }
 
+/** Model the producer binding on the exact raw observation passed to publication. */
+function boundCodexQuota(raw: Omit<StoredAccountQuota, "updatedAt">, observedAt = now) {
+  bindRawCodexDecisionResets(raw, { short: raw.shortResetAt, weekly: raw.weeklyResetAt, monthly: raw.monthlyResetAt }, observedAt);
+  return raw;
+}
+/** Raw usage producer projection for a weekly-only fixture. */
+function weeklyAnthropicQuota(percent: number) {
+  const quota = { weeklyPercent: percent, updatedAt: now };
+  bindRawDecisionWindows(quota, rawAnthropicUsageWindows({ seven_day: { utilization: percent } }, now));
+  return quota;
+}
+
 test("auth mutation owner publishes pause, reauth, replacement and deletion without JEV loading", async () => {
   const id = await anthropicAccount();
   const generation = credentialGeneration(getAccountCredential("anthropic", id)!);
-  publishAnthropicDecisionQuota(id, generation, { weeklyPercent: 90, updatedAt: now });
+  publishAnthropicDecisionQuota(id, generation, weeklyAnthropicQuota(90));
   expect(readLoadedDecisionQuotaPool("anthropic")?.[0]).toMatchObject({ usable: true, windows: [{ window: "weekly", percent: 90, observedAt: now }] });
   await setAccountPaused("anthropic", id, true);
   expect(readLoadedDecisionQuotaPool("anthropic")?.[0]?.usable).toBe(false);
@@ -41,7 +55,7 @@ test("auth mutation owner publishes pause, reauth, replacement and deletion with
   await saveAccountCredential("anthropic", id, { ...credential, access: "replacement" });
   expect(readLoadedDecisionQuotaPool("anthropic")?.[0]).toMatchObject({ usable: true });
   expect(readLoadedDecisionQuotaPool("anthropic")?.[0]?.windows).toBeUndefined();
-  publishAnthropicDecisionQuota(id, generation, { weeklyPercent: 99, updatedAt: now });
+  publishAnthropicDecisionQuota(id, generation, weeklyAnthropicQuota(99));
   expect(readLoadedDecisionQuotaPool("anthropic")?.[0]?.windows).toBeUndefined();
   await removeAccount("anthropic", id);
   expect(readLoadedDecisionQuotaPool("anthropic")).toEqual([]);
@@ -50,8 +64,10 @@ test("auth mutation owner publishes pause, reauth, replacement and deletion with
 test("Anthropic probe publication is captured-generation bound and raw family clocks stay old", async () => {
   const id = await anthropicAccount();
   const generation = credentialGeneration(credential);
-  publishAnthropicDecisionQuota(id, generation, { updatedAt: now - 1000, customWindows: [{ label: "Opus", scope: "model", percent: 90 }] });
-  const probe = await probeAnthropicQuotaWithRecovery(id, credential.access, async () => ({ weeklyPercent: 20, updatedAt: now }), () => true);
+  const familyQuota = { updatedAt: now - 1000, customWindows: [{ label: "Opus", scope: "model" as const, percent: 90 }] };
+  bindRawDecisionWindows(familyQuota, rawAnthropicUsageWindows({ seven_day_opus: { utilization: 90 } }, now - 1000));
+  publishAnthropicDecisionQuota(id, generation, familyQuota);
+  const probe = await probeAnthropicQuotaWithRecovery(id, credential.access, async () => weeklyAnthropicQuota(20), () => true);
   probe!.publishDecisionQuota();
   expect(readLoadedDecisionQuotaPool("anthropic")?.[0]?.windows).toContainEqual({ window: "opus", percent: 90, observedAt: now - 1000 });
   await saveAccountCredential("anthropic", id, { ...credential, access: "replacement" });
@@ -66,10 +82,10 @@ test("Codex credential owner and accepted writer reject late generations and dis
   expect(writer?.credentialGeneration).toBe(generation);
   setAccountQuotaFromParsed("fixture", { weeklyPercent: 90 });
   expect(readLoadedDecisionQuotaPool("codex")?.[0]?.windows).toBeUndefined();
-  setAccountQuotaFromParsed("fixture", { weeklyPercent: 90 }, undefined, undefined, null, { writer: writer!, source: "wham", raw: { weeklyPercent: 90 }, observedAt: now });
+  setAccountQuotaFromParsed("fixture", { weeklyPercent: 90 }, undefined, undefined, null, { writer: writer!, source: "wham", raw: parseUsageQuota({ rate_limit: { primary_window: { used_percent: 90 } } })!, observedAt: now });
   expect(readLoadedDecisionQuotaPool("codex")?.[0]?.windows?.[0]?.percent).toBe(90);
   saveCodexAccountCredential("fixture", { ...cred, accessToken: "replacement" });
-  setAccountQuotaFromParsed("fixture", { weeklyPercent: 99 }, undefined, undefined, null, { writer: writer!, source: "wham", raw: { weeklyPercent: 99 }, observedAt: now });
+  setAccountQuotaFromParsed("fixture", { weeklyPercent: 99 }, undefined, undefined, null, { writer: writer!, source: "wham", raw: parseUsageQuota({ rate_limit: { primary_window: { used_percent: 99 } } })!, observedAt: now });
   expect(readLoadedDecisionQuotaPool("codex")?.[0]?.windows).toBeUndefined();
   removeCodexAccountCredential("fixture");
   expect(readLoadedDecisionQuotaPool("codex")?.[0]?.usable).toBe(false);
@@ -77,11 +93,11 @@ test("Codex credential owner and accepted writer reject late generations and dis
 
 test("partial Codex headers and credits preserve omitted window clocks; full observation replaces", () => {
   publishDecisionQuotaRoster("codex", [{ id: "fixture", generation: 1, usable: true }]);
-  publishCodexDecisionQuota("fixture", 1, { weeklyPercent: 90, shortPercent: 50 }, now - 1000);
-  publishCodexDecisionQuota("fixture", 1, { shortPercent: 20 }, now);
-  publishCodexDecisionQuota("fixture", 1, { credits: { unlimited: true, observedAt: now } }, now);
+  publishCodexDecisionQuota("fixture", 1, boundCodexQuota({ weeklyPercent: 90, shortPercent: 50 }, now - 1000), now - 1000);
+  publishCodexDecisionQuota("fixture", 1, boundCodexQuota({ shortPercent: 20 }, now), now);
+  publishCodexDecisionQuota("fixture", 1, boundCodexQuota({ credits: { unlimited: true, observedAt: now } }, now), now);
   expect(readLoadedDecisionQuotaPool("codex")?.[0]?.windows).toContainEqual({ window: "weekly", percent: 90, observedAt: now - 1000 });
-  publishCodexDecisionQuota("fixture", 1, { weeklyPercent: 20 }, now, "codex", false);
+  publishCodexDecisionQuota("fixture", 1, boundCodexQuota({ weeklyPercent: 20 }, now), now, "codex", false);
   expect(readLoadedDecisionQuotaPool("codex")?.[0]?.windows).toEqual([{ window: "weekly", percent: 20, observedAt: now }]);
 });
 
@@ -89,7 +105,7 @@ test("main writers bind bearer generation and physical disappearance clears evid
   observeMainQuotaIdentity("fixture-main"); setMainAccountCredentialPresence(true);
   const writer = observeMainQuotaCredential("fixture-access", "fixture-main")!;
   const generation = mainDecisionQuotaWriterGeneration(writer)!;
-  publishCodexDecisionQuota("__main__", generation, { monthlyPercent: 90 }, now, "codex-main");
+  publishCodexDecisionQuota("__main__", generation, boundCodexQuota({ monthlyPercent: 90 }, now), now, "codex-main");
   expect(readLoadedDecisionQuotaPool("codex-main")?.[0]?.windows?.[0]?.percent).toBe(90);
   observeMainQuotaCredential("replacement", "fixture-main");
   expect(mainDecisionQuotaWriterGeneration(writer)).toBeUndefined();
@@ -213,7 +229,7 @@ test("bounded rosters never hide unknown usable accounts; account-wide quarantin
 test("a reset grant dropping the cached account bars also drops its advisory windows, and only that account's", async () => {
   const id = await anthropicAccount();
   const generation = credentialGeneration(getAccountCredential("anthropic", id)!);
-  publishAnthropicDecisionQuota(id, generation, { weeklyPercent: 95, updatedAt: now });
+  publishAnthropicDecisionQuota(id, generation, weeklyAnthropicQuota(95));
   expect(readLoadedDecisionQuotaPool("anthropic")?.[0]?.windows).toHaveLength(1);
   forgetCachedProviderAccountQuota("anthropic", "some-other-account");
   expect(readLoadedDecisionQuotaPool("anthropic")?.[0]?.windows).toHaveLength(1);

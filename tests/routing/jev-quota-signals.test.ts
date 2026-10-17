@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { activateJevQuotaEvidence, deactivateJevQuotaEvidence } from "../helpers/jev-quota-activation";
 import { jevQuotaTier, jevQuotaRank, normalizeJevQuotaTiers, normalizeJevQuotaSummary } from "../../src/combos/jev-quota-config";
 import { jevQuotaSignalFromWindows, jevQuotaSignalForTarget, jevQuotaPoolSignal, JEV_QUOTA_SIGNAL_MAX_AGE_MS, JEV_QUOTA_INSTRUCTION } from "../../src/combos/jev-quota";
-import { providerDecisionWindows, publishCodexDecisionQuota } from "../../src/providers/quota-decision-publication";
+import { bindRawCodexDecisionResets, providerDecisionWindows, publishCodexDecisionQuota } from "../../src/providers/quota-decision-publication";
 import { publishDecisionAccountQuota, publishDecisionQuotaRoster, publishDecisionKeyQuota, invalidateDecisionKeyQuotas, setDecisionAccountUsable, type DecisionQuotaWindow } from "../../src/providers/quota-decision-snapshot";
 import { boundedJevQuotaPayload } from "../../src/combos/jev-quota-route";
 import { buildJevState, buildJevRouteQuestion, JEV_API_URL, resolveJevDecision, type JevCandidate } from "../../src/combos/jev";
@@ -22,12 +23,12 @@ const fallback = { targetKey: "p/a", effort: "low" as const };
 let home: TempHome;
 let config: OcxConfig;
 beforeEach(() => {
-  home = createTempHome("ocx-jq-");
+  home = createTempHome("ocx-jq-"); activateJevQuotaEvidence();
   invalidateDecisionKeyQuotas();
   publishDecisionQuotaRoster("anthropic", []); publishDecisionQuotaRoster("codex", []); publishDecisionQuotaRoster("codex-main", []);
   config = { port: 0, defaultProvider: "p", providers: { p: { adapter: "openai-chat", baseUrl: "https://p.example.test/v1", apiKey: "fixture-key" }, jev: { adapter: "jev-decision", baseUrl: JEV_API_URL, apiKey: "fixture-judge" } } };
 });
-afterEach(() => { invalidateDecisionKeyQuotas(); home.remove(); });
+afterEach(() => { deactivateJevQuotaEvidence(); invalidateDecisionKeyQuotas(); home.remove(); });
 
 describe("JEV quota policy", () => {
   test("inclusive raw boundaries and optional moderate", () => {
@@ -110,8 +111,12 @@ describe("loaded quota evidence", () => {
     config.codexAccounts = [{ id: "a", isMain: false, email: "fixture@example.test" }, { id: "b", isMain: false, email: "fixture@example.test" }];
     config.pausedCodexAccountIds = ["__main__", "b"];
     publishDecisionQuotaRoster("codex", [{ id: "a", generation: 1, usable: true }, { id: "b", generation: 1, usable: true }]);
-    publishCodexDecisionQuota("a", 1, { weeklyPercent: 70, shortPercent: 90, shortResetAt: (now + 1000) / 1000, credits: { unlimited: true, observedAt: now } }, now);
-    publishCodexDecisionQuota("b", 1, { weeklyPercent: 10 }, now);
+    const a = { weeklyPercent: 70, shortPercent: 90, shortResetAt: (now + 1000) / 1000, credits: { unlimited: true, observedAt: now } };
+    const b = { weeklyPercent: 10 };
+    bindRawCodexDecisionResets(a, { short: a.shortResetAt, weekly: undefined, monthly: undefined }, now);
+    bindRawCodexDecisionResets(b, { short: undefined, weekly: undefined, monthly: undefined }, now);
+    publishCodexDecisionQuota("a", 1, a, now);
+    publishCodexDecisionQuota("b", 1, b, now);
     expect(jevQuotaSignalForTarget(config, "openai", "gpt-6-astra", now).tier).toBe("nearly_exhausted");
     expect(jevQuotaSignalForTarget(config, "openai", "gpt-reserve", now).tier).toBe("unknown");
     config.pausedCodexAccountIds = ["__main__"];
@@ -119,7 +124,9 @@ describe("loaded quota evidence", () => {
     setDecisionAccountUsable("codex", "b", false, 1);
     publishDecisionQuotaRoster("codex", [{ id: "a", generation: 1, usable: true }, { id: "b", generation: 1, usable: true }]);
     expect(jevQuotaSignalForTarget(config, "openai", "gpt-6-astra", now).tier).toBe("nearly_exhausted");
-    publishCodexDecisionQuota("a", 1, { credits: { unlimited: true, observedAt: now } }, now + 1);
+    const credits = { credits: { unlimited: true, observedAt: now } };
+    bindRawCodexDecisionResets(credits, { short: undefined, weekly: undefined, monthly: undefined }, now + 1);
+    publishCodexDecisionQuota("a", 1, credits, now + 1);
     expect(jevQuotaSignalForTarget(config, "openai", "gpt-6-astra", now + 1).tier).toBe("nearly_exhausted");
     expect(jevQuotaSignalForTarget(config, "openai", "gpt-6-astra", now + JEV_QUOTA_SIGNAL_MAX_AGE_MS + 1).tier).toBe("unknown");
   });

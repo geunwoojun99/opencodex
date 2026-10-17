@@ -1,4 +1,4 @@
-import { setDecisionAccountUsable } from "../providers/quota-decision-snapshot";
+import { setDecisionAccountUsable } from "../lib/decision-quota-sink";
 import { captureConfigGeneration, type GenerationContext } from "../lib/state-store-sweeper";
 import { isCodexAccountGenerationLive } from "./account-store";
 

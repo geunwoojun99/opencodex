@@ -588,8 +588,10 @@ outside opencodex because a long-running request can also explain the rise.
 
 ## JEV advisory publication
 
-Existing credential load/persist and accepted quota producer boundaries publish bounded secret-free
-rosters/windows to `src/providers/quota-decision-snapshot.ts`. These owner-observed generations
+While a live JEV combo enables quota signals, Codex account-store load/persist, native-main cache
+transitions and accepted quota producers hand bounded secret-free rosters/windows to the core slot
+`src/lib/decision-quota-sink.ts`, which forwards them to the activation-owned snapshot; otherwise
+those calls are no-ops ([activation](jev-decision.md#loaded-advisory-quota)). These owner-observed generations
 are separate from display caches and serving-account selection. Request decisions consume only
 loaded evidence; cold or mismatched generations remain unknown. Usability, partial-window clocks
 and late-writer fences follow [loaded advisory quota](jev-decision.md#loaded-advisory-quota). Codex header/WHAM parsers bind a separate in-memory raw-reset projection to their parsed observation; an explicit invalid reset stays invalid and its producer clock survives publication without changing display, durable history or hard-policy parsing.

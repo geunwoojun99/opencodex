@@ -2,10 +2,21 @@
 import type { ProviderQuota } from "./quota-types";
 import type { StoredAccountQuota } from "../codex/quota-types";
 import { resetAtToMs } from "../codex/quota-types";
-import { publishDecisionAccountQuota, type DecisionQuotaWindow } from "./quota-decision-snapshot";
+import type { DecisionQuotaWindow } from "./quota-decision-snapshot";
+import { decisionQuotaSinkActive, publishDecisionAccountQuota } from "../lib/decision-quota-sink";
 const rawWindows = new WeakMap<ProviderQuota, readonly DecisionQuotaWindow[]>();
 /** Producer retains raw advisory projection separately from unchanged display/hard policy. */
-export function bindRawDecisionWindows(quota: ProviderQuota, windows: readonly DecisionQuotaWindow[]): void { rawWindows.set(quota, windows); }
+export function bindRawDecisionWindows(quota: ProviderQuota, windows: readonly DecisionQuotaWindow[]): void { if (decisionQuotaSinkActive()) rawWindows.set(quota, windows); }
+/**
+ * Raw windows a binding producer attached to this observation, or undefined. Binding producers
+ * (Anthropic usage/header parsers) bind only while advisory evidence is active, so an observation
+ * parsed while inactive has none and must stay unknown rather than fall back to display fields,
+ * which drop invalid resets and clamp percentages.
+ */
+export function boundDecisionWindows(quota: ProviderQuota): DecisionQuotaWindow[] | undefined {
+  const raw = rawWindows.get(quota);
+  return raw ? raw.map(row => ({ ...row })) : undefined;
+}
 /** Project a provider quota report onto decision windows, preferring raw windows bound by the producer over the display fields. */
 export function providerDecisionWindows(quota: ProviderQuota): DecisionQuotaWindow[] {
   const raw = rawWindows.get(quota);
@@ -26,13 +37,17 @@ export function providerDecisionWindows(quota: ProviderQuota): DecisionQuotaWind
 }
 /** Publish decision windows for one Anthropic pool account, bound to its credential generation; a null quota publishes no windows. */
 export function publishAnthropicDecisionQuota(id: string, generation: string, quota: ProviderQuota | null, partial = false): void {
-  publishDecisionAccountQuota("anthropic", id, generation, quota ? providerDecisionWindows(quota) : [], partial);
+  if (!decisionQuotaSinkActive()) return;
+  // A non-null observation without a raw binding was parsed while inactive: unknown, never display fallback.
+  const windows = quota ? boundDecisionWindows(quota) : [];
+  if (windows) publishDecisionAccountQuota("anthropic", id, generation, windows, partial);
 }
 type CodexObservation = Omit<StoredAccountQuota, "updatedAt">;
 type CodexWindow = "short" | "weekly" | "monthly";
 const rawCodexWindows = new WeakMap<CodexObservation, readonly DecisionQuotaWindow[]>();
 /** Keep invalid resets and the producer clock apart from compatibility display/policy parsing. */
 export function bindRawCodexDecisionResets(raw: CodexObservation, resets: Record<CodexWindow, unknown>, observedAt: number): void {
+  if (!decisionQuotaSinkActive()) return;
   const windows = codexDecisionWindows(raw, observedAt).map(row => {
     const value = resets[row.window === "5h" ? "short" : row.window as CodexWindow];
     if (value === undefined || value === null) return row;
@@ -54,6 +69,9 @@ function codexDecisionWindows(raw: CodexObservation, observedAt: number): Decisi
 }
 /** Publish decision windows for a Codex or main account from the raw observation, never from the display merge, so carried windows cannot acquire a fresh clock. */
 export function publishCodexDecisionQuota(id: string, generation: number, raw: CodexObservation, observedAt: number, provider = "codex", partial = true): void {
+  if (!decisionQuotaSinkActive()) return;
   // RAW observation, never the display merge: carried windows cannot acquire a fresh clock.
-  publishDecisionAccountQuota(provider, id, generation, rawCodexWindows.get(raw) ?? codexDecisionWindows(raw, observedAt), partial);
+  // Header/WHAM parsers bind reset validity only while active; an unbound observation stays unknown.
+  const windows = rawCodexWindows.get(raw);
+  if (windows) publishDecisionAccountQuota(provider, id, generation, windows, partial);
 }

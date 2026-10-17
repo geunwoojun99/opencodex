@@ -1,4 +1,4 @@
-import { invalidateDecisionKeyQuotas, publishDecisionKeyQuota } from "../quota-decision-snapshot";
+import { decisionQuotaSinkActive, invalidateDecisionKeyQuotas, publishDecisionKeyQuota } from "../../lib/decision-quota-sink";
 import { providerDecisionWindows } from "../quota-decision-publication";
 import { createHash } from "node:crypto";
 import { effectiveCodexAuthAccountId, listCodexAuthAccountsSnapshot } from "../../codex/auth-api";
@@ -349,6 +349,7 @@ export function isProviderQuotaReportCurrent(value: ProviderQuotaReport): boolea
 
 /** Called only by an accepted collector/cache publication, never the JEV read path. */
 export function publishCollectedDecisionQuota(reports: ProviderQuotaReport[], config: OcxConfig): void {
+  if (!decisionQuotaSinkActive()) return;
   invalidateDecisionKeyQuotas();
   for (const report of reports) {
     const provider = config.providers[report.provider];

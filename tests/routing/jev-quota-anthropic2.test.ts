@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
+import { activateJevQuotaEvidence, deactivateJevQuotaEvidence } from "../helpers/jev-quota-activation";
 import { createAnthropicInstanceFixture, type AnthropicInstanceFixture } from "../helpers/anthropic-instance-fixture";
 import { readLoadedDecisionQuotaPool } from "../../src/providers/quota-decision-snapshot";
 import { anthropicCooldownRecoveryFor } from "../../src/providers/quota/anthropic-cooldown-recovery";
@@ -6,12 +7,13 @@ import { recordAnthropicAccountQuotaFromHeadersForInstance } from "../../src/pro
 import { captureConfigGeneration } from "../../src/lib/state-store-sweeper";
 import { jevQuotaSignalForTarget } from "../../src/combos/jev-quota";
 import { setAccountPaused } from "../../src/oauth/store";
+import { readAnthropicUsageQuota } from "../../src/providers/claude-cli-usage";
 import type { AnthropicInstanceId } from "../../src/providers/anthropic-instance-id";
 
 // Both pools deliberately share account ids, so an unscoped publisher would collide.
 let f: AnthropicInstanceFixture;
-beforeEach(async () => { f = await createAnthropicInstanceFixture(); await f.seed(); });
-afterEach(async () => { await f.dispose(); });
+beforeEach(async () => { f = await createAnthropicInstanceFixture(); activateJevQuotaEvidence(); await f.seed(); });
+afterEach(async () => { deactivateJevQuotaEvidence(); await f.dispose(); });
 
 /** Read the loaded primary-pool decision windows for an account id. */
 const windowsOf = (id: string) => readLoadedDecisionQuotaPool("anthropic")?.find(row => row.id === id)?.windows;
@@ -29,9 +31,13 @@ async function collidePool2Credential(id: string): Promise<void> {
 /** Publish a quota probe result for an account through the instance's real cooldown-recovery path. */
 async function publishProbe(instance: AnthropicInstanceId, id: string, weeklyPercent: number): Promise<void> {
   const token = f.store.getAccountCredential(instance, id)!.access;
-  const result = await anthropicCooldownRecoveryFor(instance).probeAnthropicQuotaWithRecovery(
-    id, token, async () => ({ weeklyPercent, updatedAt: Date.now() }), () => true);
-  result!.publishDecisionQuota();
+  const fetch = spyOn(globalThis, "fetch").mockImplementation((async () =>
+    Response.json({ seven_day: { utilization: weeklyPercent } })) as typeof globalThis.fetch);
+  try {
+    const result = await anthropicCooldownRecoveryFor(instance).probeAnthropicQuotaWithRecovery(
+      id, token, () => readAnthropicUsageQuota(token), () => true);
+    result!.publishDecisionQuota();
+  } finally { fetch.mockRestore(); }
 }
 
 test("only the primary pool roster is published; Pool 2 has no advisory roster", () => {

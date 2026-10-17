@@ -1,5 +1,5 @@
 import { rawAnthropicHeaderWindows } from "./anthropic-decision-windows";
-import { clearDecisionAccountQuotas } from "../quota-decision-snapshot";
+import { clearDecisionAccountQuotas, decisionQuotaSinkActive } from "../../lib/decision-quota-sink";
 import { bindRawDecisionWindows, publishAnthropicDecisionQuota } from "../quota-decision-publication";
 import { parseAnthropicFamilyHeaders, mergeAnthropicFamilyWindows } from "./anthropic-family-headers";
 import { anthropicModelQuotaFor, ANTHROPIC_PASSIVE_FAMILY_MAX_AGE_MS } from "../../oauth/anthropic-model-quota";
@@ -323,7 +323,7 @@ export function recordAnthropicAccountQuotaFromHeadersForInstance(
     }, observed.updatedAt),
   });
   // Advisory evidence is published for the primary pool only; Pool 2 stays unknown to decisions.
-  if (instance === "anthropic" && generation && generation === decisionCredentialGeneration) {
+  if (instance === "anthropic" && generation && generation === decisionCredentialGeneration && decisionQuotaSinkActive()) {
     bindRawDecisionWindows(observed, rawAnthropicHeaderWindows(headers, observed.updatedAt));
     publishAnthropicDecisionQuota(accountId, generation, observed, true);
   }

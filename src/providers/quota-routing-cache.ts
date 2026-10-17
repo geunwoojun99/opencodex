@@ -1,4 +1,4 @@
-import { invalidateDecisionKeyQuotas } from "./quota-decision-snapshot";
+import { invalidateDecisionKeyQuotas } from "../lib/decision-quota-sink";
 import { createHash } from "node:crypto";
 import type { OcxProviderConfig } from "../types";
 import type { ProviderQuota, ProviderQuotaReport } from "./quota";

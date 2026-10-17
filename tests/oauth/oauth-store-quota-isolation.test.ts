@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
+import { activateJevQuotaEvidence, deactivateJevQuotaEvidence } from "../helpers/jev-quota-activation";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import * as snapshot from "../../src/providers/quota-decision-snapshot";
@@ -7,8 +8,8 @@ import { createTempHome, type TempHome } from "../helpers/temp-home";
 
 let home: TempHome;
 let publish: ReturnType<typeof spyOn> | undefined;
-beforeEach(() => { home = createTempHome("ocx-auth-quota-iso-"); snapshot.publishDecisionQuotaRoster("anthropic", []); });
-afterEach(() => { publish?.mockRestore(); publish = undefined; home.remove(); });
+beforeEach(() => { home = createTempHome("ocx-auth-quota-iso-"); activateJevQuotaEvidence(); snapshot.publishDecisionQuotaRoster("anthropic", []); });
+afterEach(() => { deactivateJevQuotaEvidence(); publish?.mockRestore(); publish = undefined; home.remove(); });
 const credential = { access: "fixture-access", refresh: "fixture-refresh", expires: 2_000_000_000_000 };
 const authFiles = () => readdirSync(home.configDir).filter(name => name.startsWith("auth"));
 

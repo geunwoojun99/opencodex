@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
+import { activateJevQuotaEvidence, deactivateJevQuotaEvidence } from "../helpers/jev-quota-activation";
 import { buildJevState, JEV_MAX_REQUEST_BYTES, type JevCandidate } from "../../src/combos/jev";
 import { buildJevModelPrompt, JEV_MODEL_INSTRUCTIONS, type JevModelInvoke } from "../../src/combos/jev-model-backend";
 import { serializeJevModelRequest } from "../../src/combos/jev-model-request";
@@ -18,12 +19,12 @@ const bytes = (text: string) => new TextEncoder().encode(text).byteLength;
 let home: TempHome;
 let clock: ReturnType<typeof spyOn>;
 beforeEach(() => {
-  home = createTempHome("ocx-jq-budget-");
+  home = createTempHome("ocx-jq-budget-"); activateJevQuotaEvidence();
   clock = spyOn(Date, "now").mockReturnValue(now);
   invalidateDecisionKeyQuotas();
   resetLifecycleDrainStateForTests();
 });
-afterEach(() => { invalidateDecisionKeyQuotas(); clock.mockRestore(); home.remove(); });
+afterEach(() => { deactivateJevQuotaEvidence(); invalidateDecisionKeyQuotas(); clock.mockRestore(); home.remove(); });
 /** Minimal single-provider config for decision-model budget tests. */
 function config(reasoning = false): OcxConfig {
   return { port: 0, defaultProvider: "p", providers: { p: {

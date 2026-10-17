@@ -16,7 +16,7 @@
  * Policy: a reference that cannot be resolved fails closed (no key) and is warned once per
  * account; nothing ever rewrites plaintext into config or its backups.
  */
-import { invalidateDecisionKeyQuotas, observeDecisionKeyCredential } from "./quota-decision-snapshot";
+import { invalidateDecisionKeyQuotas, observeDecisionKeyCredential } from "../lib/decision-quota-sink";
 import { resolveEnvValue } from "../config/proxy-env";
 import { loadKeyringBinding } from "../lib/keyring-native";
 import { isGcpCredentialMaterial } from "../lib/gcp-credential-input";

@@ -63,7 +63,7 @@ import {
 } from "../../vision/eligibility";
 import type { OcxClaudeCodeConfig, OcxComboConfig, OcxConfig, OcxCustomModel, OcxProviderConfig, OcxComboCooldownWaitPolicy } from "../../types";
 import { drainAndShutdown } from "../lifecycle";
-import { reconcileLiveStateStores } from "../../lib/state-store-registrations";
+import { notifyLiveConfigObservers, reconcileLiveStateStores } from "../../lib/state-store-registrations";
 import { filterRequestLogs, getRequestLogEntries, type RequestLogEntry } from "../request-log";
 import { estimateComboCost, estimateRequestCost, normalizeCostTokens, tokensPerSecond } from "../../usage/cost";
 import type { PersistedUsageAttempt } from "../../usage/log";
@@ -519,6 +519,8 @@ export async function handleComboRoutes(ctx: ManagementContext): Promise<Respons
       if (!(error instanceof ConfigWritePublishedError)) {
         return jsonResponse({ error: "combo could not be saved" }, 500);
       }
+      // Published but bookkeeping failed: live observers (JEV quota activation) still follow the saved combo.
+      notifyLiveConfigObservers(config);
       throw error;
     }
     reconcileLiveStateStores();
@@ -551,7 +553,12 @@ export async function handleComboRoutes(ctx: ManagementContext): Promise<Respons
     const { clearComboSelectionState, clearComboTargetCooldowns } = await import("../../combos");
     delete config.combos![id];
     if (Object.keys(config.combos!).length === 0) deleteConfigTopLevelKey(config, "combos");
-    saveConfigPreservingClaudeCode(config);
+    try {
+      saveConfigPreservingClaudeCode(config);
+    } catch (error) {
+      if (error instanceof ConfigWritePublishedError) notifyLiveConfigObservers(config);
+      throw error;
+    }
     reconcileLiveStateStores();
     clearComboSelectionState(id);
     clearComboTargetCooldowns(id);

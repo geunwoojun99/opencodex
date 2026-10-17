@@ -1,15 +1,16 @@
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
+import { activateJevQuotaEvidence, deactivateJevQuotaEvidence } from "../helpers/jev-quota-activation";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import * as snapshot from "../../src/providers/quota-decision-snapshot";
 import { getCodexAccountCredential, loadCodexAccountRecordSnapshot, saveCodexAccountCredential } from "../../src/codex/account-store";
-import { getMainAccountCredentialPresence, setMainAccountCredentialPresence } from "../../src/codex/main-account-cache";
+import { getMainAccountCredentialPresence, observeMainQuotaCredential, observeMainQuotaIdentity, setMainAccountCredentialPresence } from "../../src/codex/main-account-cache";
 import { createTempHome, type TempHome } from "../helpers/temp-home";
 
 let home: TempHome;
 let publish: ReturnType<typeof spyOn> | undefined;
-beforeEach(() => { home = createTempHome("ocx-codex-quota-iso-"); snapshot.publishDecisionQuotaRoster("codex", []); });
-afterEach(() => { publish?.mockRestore(); publish = undefined; home.remove(); });
+beforeEach(() => { home = createTempHome("ocx-codex-quota-iso-"); activateJevQuotaEvidence(); snapshot.publishDecisionQuotaRoster("codex", []); });
+afterEach(() => { deactivateJevQuotaEvidence(); publish?.mockRestore(); publish = undefined; home.remove(); });
 const credential = { accessToken: "fixture-access", refreshToken: "fixture-refresh", expiresAt: 2_000_000_000_000, chatgptAccountId: "fixture-account" };
 const accountFiles = () => readdirSync(home.configDir).filter(name => name.startsWith("codex-accounts"));
 const failPublication = () => spyOn(snapshot, "publishDecisionQuotaRoster").mockImplementation(() => { throw new Error("injected publication failure"); });
@@ -39,6 +40,9 @@ test("a throwing quota publication does not fail or undo Codex persistence, and 
 });
 
 test("a throwing quota publication does not break main-credential presence transitions, and withdraws the main roster", () => {
+  // An owned identity/credential observation claims the current root; presence alone never does.
+  observeMainQuotaIdentity(credential.chatgptAccountId);
+  observeMainQuotaCredential(credential.accessToken, credential.chatgptAccountId);
   setMainAccountCredentialPresence(true);
   expect(snapshot.readLoadedDecisionQuotaPool("codex-main")).toHaveLength(1);
   publish = failPublication();
