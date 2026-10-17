@@ -25,6 +25,13 @@ const mainQuotaCredentialKey = randomBytes(32);
 let mainQuotaCredential: { bearerHmac: Buffer; writer: MainQuotaWriter } | undefined;
 let mainQuotaCredentialGeneration = 0;
 let mainDecisionCredentialUsable = true;
+// Advisory-only generation for the decision row and its writers. It follows every core credential
+// generation change and additionally advances when physical presence is lost, so absence retires
+// advisory evidence without touching the core credential binding that policy checks rely on.
+let mainDecisionGeneration = 0;
+// Advisory-only: the retained credential was re-observed since presence was last lost. Absence and
+// presence-forgetting clear it, so the decision row stays unusable until a fresh owned observation.
+let mainDecisionCredentialFresh = false;
 // Config root that owns the observed main identity/credential for advisory decision evidence only.
 // Stamped at identity/credential observations while a sink is active; other transitions never claim a root.
 let mainDecisionRoot: string | undefined;
@@ -42,7 +49,7 @@ const decisionWriterGenerations = new WeakMap<MainQuotaWriter, number>();
 /** Return the credential generation a main quota writer was captured under, or undefined once that writer is stale or its credential generation has moved. */
 export function mainDecisionQuotaWriterGeneration(writer: MainQuotaWriter): number | undefined {
   const generation = decisionWriterGenerations.get(writer);
-  return generation === mainQuotaCredentialGeneration && isMainQuotaWriterLive(writer) && mainDecisionRoot === getConfigDir() ? generation : undefined;
+  return generation === mainDecisionGeneration && isMainQuotaWriterLive(writer) && mainDecisionRoot === getConfigDir() ? generation : undefined;
 }
 
 function mainQuotaIdentityKey(accountId: string): string {
@@ -59,6 +66,7 @@ export function observeMainQuotaIdentity(accountId: string): void {
   mainAccountIdentityGeneration += 1;
   mainQuotaCredential = undefined;
   mainQuotaCredentialGeneration += 1;
+  mainDecisionGeneration += 1;
   publishMainDecisionRoster(true);
 }
 
@@ -68,7 +76,7 @@ export function captureMainQuotaWriter(accountId: string): MainQuotaWriter | und
   const identityKey = mainQuotaIdentityKey(accountId);
   if (identityKey !== observedMainQuotaIdentityKey) return undefined;
   const writer = { identityKey, identityGeneration: mainAccountIdentityGeneration };
-  if (mainQuotaCredential) decisionWriterGenerations.set(writer, mainQuotaCredentialGeneration);
+  if (mainQuotaCredential) decisionWriterGenerations.set(writer, mainDecisionGeneration);
   return writer;
 }
 
@@ -78,11 +86,12 @@ export function observeMainQuotaCredential(accessToken: string, accountId: strin
   if (!accessToken || !writer) return undefined;
   const bearerHmac = createHmac("sha256", mainQuotaCredentialKey).update(accessToken).digest();
   if (!mainQuotaCredential || !isMainQuotaWriterLive(mainQuotaCredential.writer)
-    || !timingSafeEqual(bearerHmac, mainQuotaCredential.bearerHmac)) mainQuotaCredentialGeneration += 1;
+    || !timingSafeEqual(bearerHmac, mainQuotaCredential.bearerHmac)) { mainQuotaCredentialGeneration += 1; mainDecisionGeneration += 1; }
   mainQuotaCredential = { bearerHmac, writer };
+  mainDecisionCredentialFresh = true;
   publishMainDecisionRoster(true);
   const result = { ...writer };
-  decisionWriterGenerations.set(result, mainQuotaCredentialGeneration);
+  decisionWriterGenerations.set(result, mainDecisionGeneration);
   return result;
 }
 
@@ -171,6 +180,7 @@ export function clearMainAccountInfoCache(): void {
   mainAccountIdentityGeneration += 1;
   mainQuotaCredential = undefined;
   mainQuotaCredentialGeneration += 1;
+  mainDecisionGeneration += 1;
   publishMainDecisionRoster();
 }
 
@@ -179,19 +189,18 @@ export function getMainAccountCredentialPresence(): boolean | null {
   return cachedMainCredentialPresence;
 }
 
-/** Record whether the main credential is physically present; a transition to absent invalidates the observed credential generation. Republishes the main decision roster. */
+/** Record whether the main credential is physically present. The core credential binding is left intact (a failed read must not change policy matching); losing presence only retires advisory decision evidence. */
 export function setMainAccountCredentialPresence(present: boolean): void {
-  if (!present && cachedMainCredentialPresence !== false) {
-    mainQuotaCredential = undefined; mainQuotaCredentialGeneration += 1;
-  }
+  if (!present && cachedMainCredentialPresence !== false) { mainDecisionGeneration += 1; mainDecisionCredentialFresh = false; }
   cachedMainCredentialPresence = present;
   publishMainDecisionRoster();
 }
 
-/** Forget the last observed main credential presence and invalidate the observed credential generation, then republish the main decision roster. */
+/** Forget the last observed main credential presence; retires advisory decision evidence only, leaving the core credential binding intact. */
 export function clearMainAccountCredentialPresence(): void {
   cachedMainCredentialPresence = null;
-  mainQuotaCredential = undefined; mainQuotaCredentialGeneration += 1;
+  mainDecisionGeneration += 1;
+  mainDecisionCredentialFresh = false;
   publishMainDecisionRoster();
 }
 
@@ -203,13 +212,13 @@ export function clearMainAccountCredentialPresence(): void {
  * observation.
  */
 function mainDecisionRow(): MainDecisionRow | undefined {
-  if (mainQuotaCredential === undefined) return { generation: mainQuotaCredentialGeneration, usable: false };
+  if (mainQuotaCredential === undefined) return { generation: mainDecisionGeneration, usable: false };
   if (mainDecisionRoot === undefined || mainDecisionRoot !== getConfigDir()) {
     mainDecisionRoot = undefined;
     return undefined;
   }
-  return { generation: mainQuotaCredentialGeneration,
-    usable: mainDecisionCredentialUsable && cachedMainCredentialPresence !== false };
+  return { generation: mainDecisionGeneration,
+    usable: mainDecisionCredentialFresh && mainDecisionCredentialUsable && cachedMainCredentialPresence !== false };
 }
 
 /** Hand the main decision row to the opt-in decision-quota slot (a no-op unless JEV quota signals are active); identity/credential observations claim the current root. */

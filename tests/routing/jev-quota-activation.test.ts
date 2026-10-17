@@ -6,6 +6,7 @@ import { clearDecisionAccountQuotas, decisionQuotaSinkActive, publishDecisionAcc
 import { decisionQuotaSnapshotWriteCountForTests, readLoadedDecisionQuotaPool as readSnapshotPool } from "../../src/providers/quota-decision-snapshot";
 import { credentialGeneration, getAccountSet, loadAuthStore, saveAccountCredential, saveCredential } from "../../src/oauth/store";
 import { capturePoolQuotaWriter, getCodexAccountCredential, loadCodexAccountStore, saveCodexAccountCredential } from "../../src/codex/account-store";
+import { getMainQuotaCredentialGeneration, matchesMainQuotaCredential } from "../../src/codex/main-account-cache";
 import { clearMainAccountCredentialPresence, clearMainAccountInfoCache, mainDecisionQuotaWriterGeneration, observeMainDecisionCredentialUsable, observeMainQuotaCredential, observeMainQuotaIdentity, setMainAccountCredentialPresence } from "../../src/codex/main-account-cache";
 import { notifyLiveConfigObservers, reconcileLiveStateStores, setLiveStateStoreConfig } from "../../src/lib/state-store-registrations";
 import { createOptionalListenerSet } from "../../src/server/index/optional-listeners";
@@ -422,4 +423,29 @@ test("confirmed main absence is a known-unusable main, so an exhausted pool stay
     publishCodexDecisionQuota(id, 1, raw, now);
   }
   expect(jevQuotaSignalForTarget(live, "openai", "gpt-6-astra", now).tier).toBe("nearly_exhausted");
+});
+
+test("signals off: a failed main presence read keeps the core credential binding that policy checks match", () => {
+  expect(decisionQuotaSinkActive()).toBe(false);
+  observeMainQuotaIdentity("fixture-main-subject");
+  observeMainQuotaCredential("fixture-main-bearer", "fixture-main-subject");
+  const generation = getMainQuotaCredentialGeneration();
+  setMainAccountCredentialPresence(false);
+  clearMainAccountCredentialPresence();
+  expect(getMainQuotaCredentialGeneration()).toBe(generation);
+  expect(matchesMainQuotaCredential("fixture-main-bearer", "fixture-main-subject")).toBe(true);
+});
+
+test("active: lost main presence retires the main row's advisory windows and stale writers", () => {
+  reconcileJevQuotaActivation(config());
+  observeMainQuotaIdentity("fixture-main-subject");
+  const writer = observeMainQuotaCredential("fixture-main-bearer", "fixture-main-subject")!;
+  setMainAccountCredentialPresence(true);
+  const generation = mainDecisionQuotaWriterGeneration(writer)!;
+  publishDecisionAccountQuota("codex-main", "__main__", generation, [{ window: "weekly", percent: 50, observedAt: Date.now() }]);
+  expect(readLoadedDecisionQuotaPool("codex-main")?.[0]?.windows?.[0]?.percent).toBe(50);
+  setMainAccountCredentialPresence(false);
+  expect(readLoadedDecisionQuotaPool("codex-main")).toEqual([{ id: "__main__", usable: false }]);
+  expect(mainDecisionQuotaWriterGeneration(writer)).toBeUndefined();
+  expect(matchesMainQuotaCredential("fixture-main-bearer", "fixture-main-subject")).toBe(true);
 });
