@@ -196,17 +196,20 @@ export function clearMainAccountCredentialPresence(): void {
 }
 
 /**
- * Build the single `__main__` decision row from in-memory fields, or undefined (unknown) when the
- * observed credential is not owned by the current config root. A mismatch also forgets the claimed
- * root, so returning to the old root never resurrects its row without a new owned observation.
+ * Build the single `__main__` decision row from in-memory fields. With no retained credential the
+ * row is a known-unusable main (nothing to misattribute), as before. A retained credential counts only
+ * for the config root that observed it: for any other root the row is undefined (unknown) and the
+ * claimed root is forgotten, so returning to the old root never resurrects it without a new owned
+ * observation.
  */
 function mainDecisionRow(): MainDecisionRow | undefined {
+  if (mainQuotaCredential === undefined) return { generation: mainQuotaCredentialGeneration, usable: false };
   if (mainDecisionRoot === undefined || mainDecisionRoot !== getConfigDir()) {
     mainDecisionRoot = undefined;
     return undefined;
   }
   return { generation: mainQuotaCredentialGeneration,
-    usable: mainDecisionCredentialUsable && cachedMainCredentialPresence !== false && mainQuotaCredential !== undefined };
+    usable: mainDecisionCredentialUsable && cachedMainCredentialPresence !== false };
 }
 
 /** Hand the main decision row to the opt-in decision-quota slot (a no-op unless JEV quota signals are active); identity/credential observations claim the current root. */

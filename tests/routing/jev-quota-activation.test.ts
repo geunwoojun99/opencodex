@@ -16,7 +16,9 @@ import { readAnthropicUsageQuota } from "../../src/providers/claude-cli-usage";
 import { publishAnthropicDecisionQuota, publishCodexDecisionQuota } from "../../src/providers/quota-decision-publication";
 import { probeAnthropicQuotaWithRecovery } from "../../src/providers/quota/anthropic-cooldown-recovery";
 import { parseUpstreamQuotaHeaders, parseUsageQuota, setAccountQuotaFromParsed } from "../../src/codex/quota";
-import { jevQuotaSignalFromWindows } from "../../src/combos/jev-quota";
+import { jevQuotaSignalForTarget, jevQuotaSignalFromWindows } from "../../src/combos/jev-quota";
+import { bindRawCodexDecisionResets } from "../../src/providers/quota-decision-publication";
+import { publishDecisionQuotaRoster } from "../../src/providers/quota-decision-snapshot";
 import * as derivedRegistries from "../../src/config/derived-registries";
 import { getConfigPath, saveConfig } from "../../src/config";
 import type { OcxConfig } from "../../src/types";
@@ -403,4 +405,21 @@ describe("live owner lifecycle and published combo writes", () => {
       expectWithdrawn();
     }
   });
+});
+
+test("confirmed main absence is a known-unusable main, so an exhausted pool stays nearly exhausted", () => {
+  const live = config();
+  live.providers.openai = { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward", codexAccountMode: "pool" } as OcxConfig["providers"][string];
+  live.codexAccounts = [{ id: "a", isMain: false, email: "fixture@example.test" }, { id: "b", isMain: false, email: "fixture@example.test" }] as OcxConfig["codexAccounts"];
+  reconcileJevQuotaActivation(live);
+  setMainAccountCredentialPresence(false);
+  expect(readLoadedDecisionQuotaPool("codex-main")).toEqual([{ id: "__main__", usable: false }]);
+  publishDecisionQuotaRoster("codex", [{ id: "a", generation: 1, usable: true }, { id: "b", generation: 1, usable: true }]);
+  const now = Date.now();
+  for (const id of ["a", "b"]) {
+    const raw = { weeklyPercent: 95 };
+    bindRawCodexDecisionResets(raw, { short: undefined, weekly: undefined, monthly: undefined }, now);
+    publishCodexDecisionQuota(id, 1, raw, now);
+  }
+  expect(jevQuotaSignalForTarget(live, "openai", "gpt-6-astra", now).tier).toBe("nearly_exhausted");
 });

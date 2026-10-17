@@ -104,9 +104,9 @@ replays the stores once through observe-only reads (`peekAuthStore`, `peekCodexA
 in-memory `peekMainDecisionRow`) with no hardening, backup, write, credential resolution or probe;
 the last one turning off, deletion, or a config-root change detaches the sink first and then
 withdraws every roster and window. Evidence observed while inactive is not retained, so it starts
-accumulating at activation. The native-main row claims a root only at identity/credential
-observations; after a root change it stays unknown, and its writers stale, until the next owned
-observation. `tests/routing/jev-quota-core-boundary.test.ts` keeps the snapshot and activation
+accumulating at activation. With no retained main credential the native-main row is known-unusable, as
+before. A retained credential counts only for the root whose identity/credential observation claimed
+it; for any other root the row is unknown, and its writers stale, until the next owned observation. `tests/routing/jev-quota-core-boundary.test.ts` keeps the snapshot and activation
 module off the static graph of the stores, router, lifecycle, Responses core and config.
 
 `src/providers/quota-decision-snapshot.ts` stores only bounded scalar windows and secret-free
